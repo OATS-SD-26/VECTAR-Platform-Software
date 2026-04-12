@@ -3,20 +3,21 @@ import math
 import time
 import asyncio
 
-def initialize_telem(drone):
+async def initialize_telem(drone):
 	print("Waiting for heartbeat...")
-	drone.wait_heartbeat()
-
-	print("Heartbeat from system (system %u component %u)" % (drone.target_system, drone.target_component))
-
-
-	drone.mav.request_data_stream_send(
-		drone.target_system,
-		drone.target_component,
-		mavutil.mavlink.MAV_DATA_STREAM_EXTRA1,
-		2,  # Hz
-		1
-	)
+	while True:
+		msg = drone.recv_match(type='HEARTBEAT', blocking=False)
+		if msg:
+			print("Heartbeat from system (system %u component %u)" % (drone.target_system, drone.target_component))
+			drone.mav.request_data_stream_send(
+				drone.target_system,
+				drone.target_component,
+				mavutil.mavlink.MAV_DATA_STREAM_EXTRA1,
+				2,  # Hz
+				1
+			)
+			return
+	await asyncio.sleep(0.1)
 
 	'''
 	drone.mav.request_data_stream_send(

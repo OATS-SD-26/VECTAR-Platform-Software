@@ -8,10 +8,12 @@ from drone_thing import *
 telem_task = None # This ensures that there's only ever one instance of the telemetry stream being ran so that there aren't conflicts
 
 async def send_telem_stream(drone, nc, lock):
-	initialize_telem(drone)
+	async with lock:
+		await initialize_telem(drone)
+
 	while True:
 		async with lock:
-			t = get_telem(drone)
+			t = await get_telem(drone)
 			
 		if t is not None:
 			telem_payload = {
