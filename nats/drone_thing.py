@@ -28,7 +28,7 @@ def initialize_telem(drone):
 	)
 	'''
 
-def get_telem(drone):
+async def get_telem(drone):
 	'''
 	msg = drone.recv_match(blocking=True)
 	if msg:
@@ -43,15 +43,17 @@ def get_telem(drone):
 		0, 0, 0
 	)
 	
-	msg = drone.recv_match(type='ATTITUDE', blocking=True, timeout=0.2)
-	if not msg:
-		return {"roll": -1, "pitch": -1, "yaw": -1}
-	
-	roll = math.degrees(msg.roll)
-	pitch = math.degrees(msg.pitch)
-	yaw = math.degrees(msg.yaw)
+	for _ in range(10): # Try for a bit, then give up so we don't block forever
+		msg = drone.recv_match(type='ATTITUDE', blocking=False)
+		if msg:
+			roll = math.degrees(msg.roll)
+			pitch = math.degrees(msg.pitch)
+			yaw = math.degrees(msg.yaw)
 
-	return {"roll": roll, "pitch": pitch, "yaw": yaw}
+			return {"roll": roll, "pitch": pitch, "yaw": yaw}
+		await asyncio.sleep(0.02)
+	
+	return {"roll": -1, "pitch": -1, "yaw": -1}
 
 def stop_telem(drone):
 	# Stop orientation stream
@@ -82,7 +84,7 @@ def set_mode(drone, mode):
 	
 	print(f"Switching to {mode} mode...")
 
-def arm_vehicle(drone):
+async def arm_vehicle(drone):
 	print("Sending arming command...")
 	
 	# master.target_system is the ID of the Cube (usually 1)
@@ -98,23 +100,45 @@ def arm_vehicle(drone):
 
 	# Wait until the vehicle acknowledges it is armed
 	print("Waiting for vehicle to arm...")
-	drone.motors_armed_wait()
-	print("VEHICLE ARMED!")
+	# drone.motors_armed_wait() # Don't want to use this since it's not async-friendly
+	while True:
+		msg = drone.recv_match(type='HEARTBEAT', blocking=False)
+		if msg:
+			if msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED: # This checks if the armed flag is set
+				print("VEHICLE ARMED!")
+				break
+		await asyncio.sleep(0.1) # Give NATS control back in between checks for arm
 
-def disarm_vehicle(drone):
+async def disarm_vehicle(drone):
 	print("Sending disarm command...")
-	drone.mav.command_long_send(
-		drone.target_system,
-		drone.target_component,
-		mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
-		0,
-		0, # 0 to DISARM
-		0, 0, 0, 0, 0, 0
-	)
-	
-	print("Waiting for vehicle to disarm...")
-	drone.motors_disarmed_wait()
-	print("VEHICLE DISARMED!")
+
+	for attempt in range(30):
+		# Set throttle to minimum value and center virtual sticks
+		drone.mav.rc_channels_override_send(
+			drone.target_system, drone.target_component,
+			1500, 1500, 1000, 1500, 65535, 65535, 65535, 65535
+		)
+
+		# Send disarm command using FORCE flag
+		drone.mav.command_long_send(
+			drone.target_system,
+			drone.target_component,
+			mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+			0,
+			0, # 0 to DISARM
+			21196, # This is used to FORCE disarm
+			0, 0, 0, 0, 0
+		)
+
+		# Check if successfully disarmed
+		msg = drone.recv_match(type='HEARTBEAT', blocking=False)
+		if msg:
+			if not (msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
+				print("VEHICLE DISARMED!")
+				return
+		await asyncio.sleep(0.1)
+
+	print("WARNING: Drone refused to disarm after 3 seconds!")
 
 '''
 This only worked in the GUIDED mode, which doesn't work for now
@@ -140,13 +164,26 @@ def send_velocity_command(drone, vx, vy, vz):
 '''
 This is to test throttle in STABLIZE mode
 '''
-async def throttle_continuous(drone, throttle_pwm, duration, lock):
+async def throttle_continuous(drone, throttle_val, duration, lock):
 	"""
 	throttle_pwm: 1000 (off) to 2000 (full)
 	duration: seconds to hold this throttle
 	"""
-	print(f"Driving throttle to {throttle_pwm} for {duration} seconds...")
+	print(f"Driving throttle to {throttle_val} for {duration} seconds...")
 	end_time = time.time() + duration
+
+	# drone.mav.command_long_send(
+	# 	drone.target_system,
+	# 	drone.target_component,
+	# 	mavutil.mavlink.MAV_CMD_DO_MOTOR_TEST,
+	# 	0,                 # Confirmation
+	# 	1,       # Param 1: Motor instance number
+	# 	1,                 # Param 2: Throttle type (1 = percentage)
+	# 	throttle_val,  # Param 3: Throttle value
+	# 	duration,      # Param 4: Timeout in seconds
+	# 	0,                 # Param 5: Motor count (for multiple motors)
+	# 	0, 0               # Param 6, 7: Unused
+	# )
 	
 	while time.time() < end_time:
 		async with lock:
@@ -155,14 +192,22 @@ async def throttle_continuous(drone, throttle_pwm, duration, lock):
 			drone.mav.rc_channels_override_send(
 				drone.target_system,
 				drone.target_component,
-				65535,      # Chan 1 (Roll)
-				65535,      # Chan 2 (Pitch)
-				throttle_pwm, # Chan 3 (Throttle) - THIS IS THE ONE
-				65535,      # Chan 4 (Yaw)
+				65535,        # Chan 1 (Roll)
+				65535,        # Chan 2 (Pitch)
+				throttle_val, # Chan 3 (Throttle) - THIS IS THE ONE
+				65535,        # Chan 4 (Yaw)
 				65535, 65535, 65535, 65535 # Chans 5-8
 			)
 			drone.recv_match(blocking=False)
 		await asyncio.sleep(0.1) # Send at 10Hz
+
+def clear_all_overrides(drone):
+	print("Releasing all RC overrides to 0...")
+	drone.mav.rc_channels_override_send(
+		drone.target_system,
+		drone.target_component,
+		0, 0, 0, 0, 0, 0, 0, 0
+	)
 	
 
 if __name__ == "__main__":
