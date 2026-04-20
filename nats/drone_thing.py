@@ -36,25 +36,45 @@ async def get_telem(drone):
 		print(msg)
 
 	'''
+    # Send heartbeat so ArduPilot knows we are still connected
+    drone.mav.heartbeat_send(
+        mavutil.mavlink.MAV_TYPE_GCS,
+        mavutil.mavlink.MAV_AUTOPILOT_INVALID,
+        0, 0, 0
+    )
 
-	# Need to send a heartbeat so that ArduPilot knows we are still listening to telem stream
-	drone.mav.heartbeat_send(
-		mavutil.mavlink.MAV_TYPE_GCS,
-		mavutil.mavlink.MAV_AUTOPILOT_INVALID,
-		0, 0, 0
-	)
-	
-	for _ in range(10): # Try for a bit, then give up so we don't block forever
-		msg = drone.recv_match(type='ATTITUDE', blocking=False)
-		if msg:
-			roll = math.degrees(msg.roll)
-			pitch = math.degrees(msg.pitch)
-			yaw = math.degrees(msg.yaw)
+	attitude = None
+    position = None
 
-			return {"roll": roll, "pitch": pitch, "yaw": yaw}
-		await asyncio.sleep(0.02)
-	
-	return {"roll": -1, "pitch": -1, "yaw": -1}
+    for _ in range(10):
+        if attitude is None:
+            msg = drone.recv_match(type='ATTITUDE', blocking=False)
+            if msg:
+                attitude = {
+                    "roll":  math.degrees(msg.roll),
+                    "pitch": math.degrees(msg.pitch),
+                    "yaw":   math.degrees(msg.yaw),
+                }
+
+        if position is None:
+            msg = drone.recv_match(type='GLOBAL_POSITION_INT', blocking=False)
+            if msg:
+                position = {
+                    "lat": msg.lat / 1e7,        # degrees
+                    "lon": msg.lon / 1e7,         # degrees
+                    "alt": msg.relative_alt / 1e3, # meters above home
+                    "hdg": msg.hdg / 100.0,        # degrees (0-360)
+                }
+
+        if attitude and position:
+            break
+
+        await asyncio.sleep(0.02)
+
+    return {
+        "attitude": attitude or {"roll": -1, "pitch": -1, "yaw": -1},
+        "position": position or {"lat": -1, "lon": -1, "alt": -1, "hdg": -1},
+    }
 
 def stop_telem(drone):
 	# Stop orientation stream
@@ -229,6 +249,7 @@ if __name__ == "__main__":
 		try:
 			t = get_telem(drone)
 			print(f"Roll: {t["roll"]:.4f} | Pitch: {t["pitch"]:.4f} | Yaw: {t["yaw"]:.4f}", end='\r', flush=True)
+			print(f"Lat: {t["lat"]:.4f} | Lon: {t["lon"]:.4f} | Alt: {t["alt"]:.4f}", end='\r', flush=True)
 
 
 		except KeyboardInterrupt:
