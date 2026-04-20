@@ -51,19 +51,18 @@ async def get_telem(drone):
 	position = None
 
 	try:
-		for _ in range(10):
-			if attitude is None:
-				msg = drone.recv_match(type='ATTITUDE', blocking=False)
-				if msg:
+		for _ in range(50):  # Increased attempts for debugging
+			msg = drone.recv_match(blocking=False)
+			if msg:
+				msg_type = msg.get_type()
+				print(f"Received message: {msg_type}")
+				if msg_type == 'ATTITUDE' and attitude is None:
 					attitude = {
 						"roll":  math.degrees(msg.roll),
 						"pitch": math.degrees(msg.pitch),
 						"yaw":   math.degrees(msg.yaw),
 					}
-
-			if position is None:
-				msg = drone.recv_match(type='GLOBAL_POSITION_INT', blocking=False)
-				if msg:
+				elif msg_type == 'GLOBAL_POSITION_INT' and position is None:
 					position = {
 						"lat": msg.lat / 1e7,        # degrees
 						"lon": msg.lon / 1e7,         # degrees
