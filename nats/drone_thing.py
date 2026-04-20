@@ -37,44 +37,44 @@ async def get_telem(drone):
 
 	'''
     # Send heartbeat so ArduPilot knows we are still connected
-    drone.mav.heartbeat_send(
-        mavutil.mavlink.MAV_TYPE_GCS,
+	drone.mav.heartbeat_send(
+		mavutil.mavlink.MAV_TYPE_GCS,
         mavutil.mavlink.MAV_AUTOPILOT_INVALID,
         0, 0, 0
     )
 
 	attitude = None
-    position = None
+	position = None
 
-    for _ in range(10):
-        if attitude is None:
-            msg = drone.recv_match(type='ATTITUDE', blocking=False)
-            if msg:
-                attitude = {
-                    "roll":  math.degrees(msg.roll),
-                    "pitch": math.degrees(msg.pitch),
-                    "yaw":   math.degrees(msg.yaw),
-                }
+	for _ in range(10):
+		if attitude is None:
+			msg = drone.recv_match(type='ATTITUDE', blocking=False)
+			if msg:
+				attitude = {
+					"roll":  math.degrees(msg.roll),
+					"pitch": math.degrees(msg.pitch),
+					"yaw":   math.degrees(msg.yaw),
+				}
 
-        if position is None:
-            msg = drone.recv_match(type='GLOBAL_POSITION_INT', blocking=False)
-            if msg:
-                position = {
-                    "lat": msg.lat / 1e7,        # degrees
-                    "lon": msg.lon / 1e7,         # degrees
-                    "alt": msg.relative_alt / 1e3, # meters above home
-                    "hdg": msg.hdg / 100.0,        # degrees (0-360)
-                }
+		if position is None:
+			msg = drone.recv_match(type='GLOBAL_POSITION_INT', blocking=False)
+			if msg:
+				position = {
+					"lat": msg.lat / 1e7,        # degrees
+					"lon": msg.lon / 1e7,         # degrees
+					"alt": msg.relative_alt / 1e3, # meters above home
+					"hdg": msg.hdg / 100.0,        # degrees (0-360)
+				}
 
-        if attitude and position:
-            break
+		if attitude and position:
+			break
 
-        await asyncio.sleep(0.02)
+		await asyncio.sleep(0.02)
 
-    return {
-        "attitude": attitude or {"roll": -1, "pitch": -1, "yaw": -1},
-        "position": position or {"lat": -1, "lon": -1, "alt": -1, "hdg": -1},
-    }
+	return {
+		"attitude": attitude or {"roll": -1, "pitch": -1, "yaw": -1},
+		"position": position or {"lat": -1, "lon": -1, "alt": -1, "hdg": -1},
+	}
 
 def stop_telem(drone):
 	# Stop orientation stream
