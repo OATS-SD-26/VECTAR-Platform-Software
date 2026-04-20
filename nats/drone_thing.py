@@ -5,19 +5,23 @@ import asyncio
 
 async def initialize_telem(drone):
 	print("Waiting for heartbeat...")
-	while True:
-		msg = drone.recv_match(type='HEARTBEAT', blocking=False)
-		if msg:
-			print("Heartbeat from system (system %u component %u)" % (drone.target_system, drone.target_component))
-			drone.mav.request_data_stream_send(
-				drone.target_system,
-				drone.target_component,
-				mavutil.mavlink.MAV_DATA_STREAM_EXTRA1,
-				2,  # Hz
-				1
-			)
-			return
-	await asyncio.sleep(0.1)
+	try:
+		while True:
+			msg = drone.recv_match(type='HEARTBEAT', blocking=False)
+			if msg:
+				print("Heartbeat from system (system %u component %u)" % (drone.target_system, drone.target_component))
+				drone.mav.request_data_stream_send(
+					drone.target_system,
+					drone.target_component,
+					mavutil.mavlink.MAV_DATA_STREAM_EXTRA1,
+					10,  # Hz
+					1
+				)
+				return
+			await asyncio.sleep(0.1)
+	except Exception as e:
+		print(f"Error initializing telemetry: {e}")
+		return
 
 	'''
 	drone.mav.request_data_stream_send(
@@ -46,34 +50,44 @@ async def get_telem(drone):
 	attitude = None
 	position = None
 
-	for _ in range(10):
-		if attitude is None:
-			msg = drone.recv_match(type='ATTITUDE', blocking=False)
-			if msg:
-				attitude = {
-					"roll":  math.degrees(msg.roll),
-					"pitch": math.degrees(msg.pitch),
-					"yaw":   math.degrees(msg.yaw),
-				}
+	try:
+		for _ in range(10):
+			if attitude is None:
+				msg = drone.recv_match(type='ATTITUDE', blocking=False)
+				if msg:
+					attitude = {
+						"roll":  math.degrees(msg.roll),
+						"pitch": math.degrees(msg.pitch),
+						"yaw":   math.degrees(msg.yaw),
+					}
 
-		if position is None:
-			msg = drone.recv_match(type='GLOBAL_POSITION_INT', blocking=False)
-			if msg:
-				position = {
-					"lat": msg.lat / 1e7,        # degrees
-					"lon": msg.lon / 1e7,         # degrees
-					"alt": msg.relative_alt / 1e3, # meters above home
-					"hdg": msg.hdg / 100.0,        # degrees (0-360)
-				}
+			if position is None:
+				msg = drone.recv_match(type='GLOBAL_POSITION_INT', blocking=False)
+				if msg:
+					position = {
+						"lat": msg.lat / 1e7,        # degrees
+						"lon": msg.lon / 1e7,         # degrees
+						"alt": msg.relative_alt / 1e3, # meters above home
+						"hdg": msg.hdg / 100.0,        # degrees (0-360)
+					}
+					print(position)
 
-		if attitude and position:
-			break
+			if attitude and position:
+				break
 
-		await asyncio.sleep(0.02)
+			await asyncio.sleep(0.02)
+	except Exception as e:
+		print(f"Error receiving telemetry: {e}")
+		return None
 
 	return {
-		"attitude": attitude or {"roll": -1, "pitch": -1, "yaw": -1},
-		"position": position or {"lat": -1, "lon": -1, "alt": -1, "hdg": -1},
+		"roll": attitude["roll"] if attitude else -1,
+		"pitch": attitude["pitch"] if attitude else -1,
+		"yaw": attitude["yaw"] if attitude else -1,
+		"lat": position["lat"] if position else -1,
+		"lon": position["lon"] if position else -1,
+		"alt": position["alt"] if position else -1,
+		"hdg": position["hdg"] if position else -1,
 	}
 
 def stop_telem(drone):

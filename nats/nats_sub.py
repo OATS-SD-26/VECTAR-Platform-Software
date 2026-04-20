@@ -22,7 +22,11 @@ async def send_telem_stream(drone, nc, lock):
 				"data": {
 					"roll": t["roll"],
 					"pitch": t["pitch"],
-					"yaw": t["yaw"]
+					"yaw": t["yaw"],
+					"lat": t["lat"],
+					"lon": t["lon"],
+					"alt": t["alt"],
+					"hdg": t["hdg"]
 				}
 			}
 
