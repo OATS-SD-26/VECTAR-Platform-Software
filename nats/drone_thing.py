@@ -70,7 +70,6 @@ async def get_telem(drone):
 						"alt": msg.relative_alt / 1e3, # meters above home
 						"hdg": msg.hdg / 100.0,        # degrees (0-360)
 					}
-					print(position)
 
 			if attitude and position:
 				break

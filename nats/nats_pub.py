@@ -28,8 +28,9 @@ async def request_telem(nc):
             yaw = float(t.get('yaw', 0.0))
             lat = float(t.get('lat', 0.0))
             lon = float(t.get('lon', 0.0))
+            alt = float(t.get('alt', 0.0))
 
-            print(f"[{timestamp:.4f}] Roll: {roll:>9.4f} | Pitch: {pitch:>9.4f} | Yaw: {yaw:>9.4f} | Lat: {lat:>10.6f} | Lon: {lon:>10.6f}", end='\r', flush=True)
+            print(f"[{timestamp:.4f}] Roll: {roll:>9.4f} | Pitch: {pitch:>9.4f} | Yaw: {yaw:>9.4f} | Lat: {lat:>10.6f} | Lon: {lon:>10.6f} | Alt: {alt:>10.6f}", end='\r', flush=True)
         except:
             print(f"Raw unparseable data: {msg.data.decode()}")
 
