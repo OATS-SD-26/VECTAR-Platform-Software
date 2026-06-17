@@ -76,8 +76,8 @@ async def process_command(drone, nc, cmd, lock):
 			clear_all_overrides(drone)
 		return{"status": "success", "executed": cmd}
 
-	elif cmd in ("stop telem","stop telementry"):
-		print("Command to stop telementary understood. Stopping telementry")
+	elif cmd in ("stop telem","stop telemetry"):
+		print("Command to stop telemetry understood. Stopping telemetry")
 		if telem_task is not None and not telem_task.done():
 			telem_task.cancel()
 			telem_task = None
@@ -107,14 +107,14 @@ async def process_command(drone, nc, cmd, lock):
 				async with lock:
 					await disarm_vehicle(drone)
 					clear_all_overrides(drone)
-				return{"status":"error","message":"Vehicle failed to arm")
+				return{"status":"error","message":"Vehicle failed to arm"}
 			try:
 				await throttle_continuous(drone, pwm, duration, lock)
 			finally:
 				async with lock:
 					await disarm_vehicle(drone)
 					clear_all_overrides(drone)
-				return {"status": "success", "executed": cmd}
+			return {"status": "success", "executed": cmd}
 		else:
 			return{"status": "error", "message": "Invalid throttle command. Must be entered in the form \'throttle x, y\', where \'x\' is the pwm value (an int between 1000 and 2000) and \'y\' is the duration (an int or float greater than 0)"}
 		
