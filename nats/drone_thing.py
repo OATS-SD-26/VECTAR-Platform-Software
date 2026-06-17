@@ -128,8 +128,8 @@ async def arm_vehicle(drone, timeout=10):
 				print("VEHICLE ARMED!")
 				return True
 		await asyncio.sleep(0.1) # Give NATS control back in between checks for arm
-		print("VEHCILE NOT ABLE TO BE ARMED!")
-		return false
+	print("VEHCILE NOT ABLE TO BE ARMED!")
+	return False
 async def disarm_vehicle(drone):
 	print("Sending disarm command...")
 
