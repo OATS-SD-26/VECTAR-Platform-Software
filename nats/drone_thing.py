@@ -23,24 +23,8 @@ async def initialize_telem(drone):
 		print(f"Error initializing telemetry: {e}")
 		return
 
-	'''
-	drone.mav.request_data_stream_send(
-		drone.target_system,
-		drone.target_component,
-		mavutil.mavlink.MAV_DATA_STREAM_EXTRA1,
-		0,   # rate ignored
-		0    # STOP STREAM
-	)
-	'''
-
 async def get_telem(drone):
-	'''
-	msg = drone.recv_match(blocking=True)
-	if msg:
-		print(msg)
-
-	'''
-    # Send heartbeat so ArduPilot knows we are still connected
+	# Send heartbeat so ArduPilot knows we are still connected
 	drone.mav.heartbeat_send(
 		mavutil.mavlink.MAV_TYPE_GCS,
         mavutil.mavlink.MAV_AUTOPILOT_INVALID,
@@ -134,7 +118,8 @@ async def arm_vehicle(drone):
 	# Wait until the vehicle acknowledges it is armed
 	print("Waiting for vehicle to arm...")
 	# drone.motors_armed_wait() # Don't want to use this since it's not async-friendly
-	while True:
+	# arming has a timeout before it calls itself again, allows for no flying commands to work without having to be armed
+	while time.time() - start_time < timeout:
 		msg = drone.recv_match(type='HEARTBEAT', blocking=False)
 		if msg:
 			if msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED: # This checks if the armed flag is set
@@ -231,7 +216,6 @@ async def throttle_continuous(drone, throttle_val, duration, lock):
 				65535,        # Chan 4 (Yaw)
 				65535, 65535, 65535, 65535 # Chans 5-8
 			)
-			drone.recv_match(blocking=False)
 		await asyncio.sleep(0.1) # Send at 10Hz
 
 def clear_all_overrides(drone):
