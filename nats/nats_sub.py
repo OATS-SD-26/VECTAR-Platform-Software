@@ -38,7 +38,7 @@ async def process_command(drone, nc, cmd, lock):
 	global telem_task
 
 	if cmd is None:
-		return{"status": "error","message": "Stream started"}
+		return{"status": "error","message": "Missing command"}
 
 	cmd = cmd.strip().lower()
 
@@ -52,12 +52,22 @@ async def process_command(drone, nc, cmd, lock):
 			return {"status": "ignored", "message": "Stream already running"}
 		
 	elif cmd == "fly forward":
-		print("Command to fly forward understood. Flying forward.")
-		return {"status": "success", "executed": cmd}
+		armed = await arm_vehcile(drone)
+		if not armed:
+			clear_all_overrides(drone)
+			return {"status": "error", "executed": cmd, "reason": "Vehicle failed to arm"}
+		else:
+			print("Command to fly forward understood. Flying forward.")
+			return {"status": "success", "executed": cmd}
 	
 	elif cmd == "fly up":
-		print("Command to fly up understood. Flying up.")
-		return {"status": "success", "executed": cmd}
+		armed = await arm_vehcile(drone)
+		if not armed:
+			clear_all_overrides(drone)
+			return {"status": "error", "executed": cmd, "reason": "Vehicle failed to arm"}
+		else:
+			print("Command to fly up understood. Flying up.")
+			return {"status": "success", "executed": cmd}
 
 	elif cmd == "disarm":
 		print("Command to disarm understood. Disarming.")
@@ -66,18 +76,20 @@ async def process_command(drone, nc, cmd, lock):
 			clear_all_overrides(drone)
 		return{"status": "sucess", "executed": cmd}
 
-	elif cmd in ("stop telem","stop telementary"):
-		print("Command to stop telementary understood. Stopping telementary")
+	elif cmd in ("stop telem","stop telementry"):
+		print("Command to stop telementary understood. Stopping telementry")
+		if telem_task is not None and not telem_task.done():
+			telem_task.cancel()
 		async with lock:
 			stop_telem(drone)
-		return{"status": "sucess", "executed", cmd}
+		return{"status": "sucess", "executed": cmd}
 			
 	
 	elif cmd == "clear overrides":
     	print("Command to clear overrides understood. Clearing overrides")
     	async with lock:
         	clear_all_overrides(drone)
-    	return {"status": "success", "executed": cmd}
+    	return {"status": "sucess", "executed": cmd}
 
 	
 	elif cmd.startswith("throttle"):
