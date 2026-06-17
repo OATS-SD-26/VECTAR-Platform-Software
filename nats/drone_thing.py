@@ -228,7 +228,30 @@ def clear_all_overrides(drone):
 		drone.target_component,
 		0, 0, 0, 0, 0, 0, 0, 0
 	)
-	
+
+async def movement(drone,duration, lock, roll, pitch, throttle, yaw)
+
+	print( f"RC override for {duration} seconds | "f"roll = {roll}, pitch = {pitch}, throttle = {throttle}, yaw = {yaw}")
+	end_time = time.time() + duration
+
+	while(time.time() < end_time)
+		async with lock 
+			drone.mav.rc_channels_override_send(
+				drone.target_system,
+				drone.target_component,
+				roll_val,        # Chan 1 (Roll)
+				pitch_val,       # Chan 2 (Pitch)
+				throttle_val,	 # Chan 3 (Throttle)
+				yaw_val,         # Chan 4 (Yaw)
+				65535, 65535, 65535, 65535 # Chans 5-8
+			)
+		await asyncio.sleep(0.1) # Send at 10Hz
+
+async def fly_forward(time)
+ await movement(drone,duration=time,lock,65535,65535,1500,65535)
+
+
+
 
 if __name__ == "__main__":
 	PORT = "/dev/ttyS4"
