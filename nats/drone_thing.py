@@ -101,7 +101,7 @@ def set_mode(drone, mode):
 	
 	print(f"Switching to {mode} mode...")
 
-async def arm_vehicle(drone):
+async def arm_vehicle(drone, timeout=10):
 	print("Sending arming command...")
 	
 	# master.target_system is the ID of the Cube (usually 1)
@@ -117,6 +117,8 @@ async def arm_vehicle(drone):
 
 	# Wait until the vehicle acknowledges it is armed
 	print("Waiting for vehicle to arm...")
+
+	start_time = time.time()
 	# drone.motors_armed_wait() # Don't want to use this since it's not async-friendly
 	# arming has a timeout before it calls itself again, allows for no flying commands to work without having to be armed
 	while time.time() - start_time < timeout:
@@ -124,9 +126,10 @@ async def arm_vehicle(drone):
 		if msg:
 			if msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED: # This checks if the armed flag is set
 				print("VEHICLE ARMED!")
-				break
+				return True
 		await asyncio.sleep(0.1) # Give NATS control back in between checks for arm
-
+		print("VEHCILE NOT ABLE TO BE ARMED!")
+		return false
 async def disarm_vehicle(drone):
 	print("Sending disarm command...")
 
