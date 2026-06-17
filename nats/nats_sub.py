@@ -52,7 +52,7 @@ async def process_command(drone, nc, cmd, lock):
 			return {"status": "ignored", "message": "Stream already running"}
 		
 	elif cmd == "fly forward":
-		armed = await arm_vehcile(drone)
+		armed = await arm_vehicle(drone)
 		if not armed:
 			clear_all_overrides(drone)
 			return {"status": "error", "executed": cmd, "reason": "Vehicle failed to arm"}
@@ -61,7 +61,7 @@ async def process_command(drone, nc, cmd, lock):
 			return {"status": "success", "executed": cmd}
 	
 	elif cmd == "fly up":
-		armed = await arm_vehcile(drone)
+		armed = await arm_vehicle(drone)
 		if not armed:
 			clear_all_overrides(drone)
 			return {"status": "error", "executed": cmd, "reason": "Vehicle failed to arm"}
@@ -74,22 +74,23 @@ async def process_command(drone, nc, cmd, lock):
 		async with lock:
 			await disarm_vehicle(drone)
 			clear_all_overrides(drone)
-		return{"status": "sucess", "executed": cmd}
+		return{"status": "success", "executed": cmd}
 
 	elif cmd in ("stop telem","stop telementry"):
 		print("Command to stop telementary understood. Stopping telementry")
 		if telem_task is not None and not telem_task.done():
 			telem_task.cancel()
+			telem_task = None
 		async with lock:
 			stop_telem(drone)
-		return{"status": "sucess", "executed": cmd}
+		return{"status": "success", "executed": cmd}
 			
 	
 	elif cmd == "clear overrides":
     	print("Command to clear overrides understood. Clearing overrides")
     	async with lock:
         	clear_all_overrides(drone)
-    	return {"status": "sucess", "executed": cmd}
+    	return {"status": "success", "executed": cmd}
 
 	
 	elif cmd.startswith("throttle"):
@@ -101,12 +102,19 @@ async def process_command(drone, nc, cmd, lock):
 				return{"status": "error", "message": "Invalid throttle command. Must be entered in the form \'throttle x, y\', where \'x\' is the pwm value (an int between 1000 and 2000) and \'y\' is the duration (an int or float greater than 0)"}
 			async with lock:
 				set_mode(drone, "STABILIZE")
-				await arm_vehicle(drone)
-			await throttle_continuous(drone, pwm, duration, lock)
-			async with lock:
-				await disarm_vehicle(drone)
-				clear_all_overrides(drone)
-			return {"status": "success", "executed": cmd}
+				armed = await arm_vehicle(drone)
+			if not armed: 
+				async with lock:
+					await disarm_vehicle(drone)
+					clear_all_overrides(drone)
+				return{"status":"error","message":"Vehicle failed to arm")
+			try:
+				await throttle_continuous(drone, pwm, duration, lock)
+			finally:
+				async with lock:
+					await disarm_vehicle(drone)
+					clear_all_overrides(drone)
+				return {"status": "success", "executed": cmd}
 		else:
 			return{"status": "error", "message": "Invalid throttle command. Must be entered in the form \'throttle x, y\', where \'x\' is the pwm value (an int between 1000 and 2000) and \'y\' is the duration (an int or float greater than 0)"}
 		
