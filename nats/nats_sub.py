@@ -37,6 +37,11 @@ async def send_telem_stream(drone, nc, lock):
 async def process_command(drone, nc, cmd, lock):
 	global telem_task
 
+	if cmd is None:
+		return{"status": "error","message": "Stream started"}
+
+	cmd = cmd.strip().lower()
+
 	if cmd == "telem":
 		if telem_task is None or telem_task.done():
 			print("Starting telemetry stream...")
@@ -54,11 +59,26 @@ async def process_command(drone, nc, cmd, lock):
 		print("Command to fly up understood. Flying up.")
 		return {"status": "success", "executed": cmd}
 
-	elif cmd in ("clear overrides"):
-    print("Command to clear overrides understood. Clearing overrides")
-    async with lock:
-        clear_all_overrides(drone)
-    return {"status": "success", "executed": cmd}
+	elif cmd == "disarm":
+		print("Command to disarm understood. Disarming.")
+		async with lock:
+			await disarm_vehicle(drone)
+			clear_all_overrides(drone)
+		return{"status": "sucess", "executed": cmd}
+
+	elif cmd in ("stop telem","stop telementary"):
+		print("Command to stop telementary understood. Stopping telementary")
+		async with lock:
+			stop_telem(drone)
+		return{"status": "sucess", "executed", cmd}
+			
+	
+	elif cmd == "clear overrides":
+    	print("Command to clear overrides understood. Clearing overrides")
+    	async with lock:
+        	clear_all_overrides(drone)
+    	return {"status": "success", "executed": cmd}
+
 	
 	elif cmd.startswith("throttle"):
 		throttle_match = re.fullmatch(r"throttle\s+(\d+),\s*(\d+\.?\d*)", cmd)
