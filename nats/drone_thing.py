@@ -249,8 +249,8 @@ async def movement(
     print(f"RC override for {duration} seconds | " f"roll = {roll_val}, pitch = {pitch_val}, throttle = {throttle_val}, yaw = {yaw_val}")
     end_time = time.time() + duration
 
-    while(time.time() < end_time)
-        async with lock
+    while(time.time() < end_time):
+        async with lock:
             drone.mav.rc_channels_override_send(
                 drone.target_system,
                 drone.target_component,
@@ -260,7 +260,6 @@ async def movement(
                 yaw_val,       # Chan 4 (Yaw)
                 65535, 65535, 65535, 65535  # Chans 5-8
             )
-
         await asyncio.sleep(0.1)  # Send at 10Hz
 
 if __name__ == "__main__":
