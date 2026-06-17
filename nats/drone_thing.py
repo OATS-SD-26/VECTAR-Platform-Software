@@ -140,7 +140,7 @@ async def current_height(drone, lock): #get the current height helper function
         printf("Sucessfully extracted current altitude which is set to {current_alt} m")
         return current_alt
     
-async def set_height(drone, target_height, lock, throttle_val=1550, timeout=10): #To increase the height in meters
+async def increase_height(drone, target_height, lock, throttle_val=1550, timeout=10): #To increase the height in meters
     refference_alt = await current_height(drone, lock)
     if refference_alt is None:
         print("Could not get current height")
@@ -162,12 +162,37 @@ async def set_height(drone, target_height, lock, throttle_val=1550, timeout=10):
                 clear_all_overrides(drone)
             return True
         await movement(drone,duration=0.2,lock=lock,throttle_val=throttle_val)
-    print("Timeout has been reached")
+    print("Increase height timeout has been reached")
     async with lock:
         clear_all_overrides(drone)
     return False
     
+async def decrease_height(drone, target_height, lock, throttle_val=1450, timeout=10): #To decrease the height in meters
+    refference_alt = await current_height(drone, lock)
+    if refference_alt is None:
+        print("Could not get current height")
+        return None
+    start_time = time.time()
 
+    while time.time()-start_time < timeout:
+        current_alt = await get_current_altitude_mm(drone, lock)
+
+        if current_alt is None:
+            await asyncio.sleep(0.1)
+            continue
+    
+        delta_alt = refference_alt - current_alt
+        prinft("Drone being moved {delta_alt}m")
+        if delta_alt <= target_height:
+            printf("Decrease of {delta_alt} has been achived")
+            async with lock:
+                clear_all_overrides(drone)
+            return True
+        await movement(drone,duration=0.2,lock=lock,throttle_val=throttle_val)
+    print("Decrease height timeout has been reached")
+    async with lock:
+        clear_all_overrides(drone)
+    return False
 
 async def arm_vehicle(drone, timeout=10):
     print("Sending arming command...")
