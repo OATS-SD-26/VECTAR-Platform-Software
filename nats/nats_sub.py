@@ -110,7 +110,26 @@ async def process_command(drone, nc, cmd, lock):
         async with lock:
             clear_all_overrides(drone)
         return {"status": "success", "executed": cmd}
-
+    
+    elif cmd.startswith("set height"):
+        height_match = re.fullmatch(r"set height\s+(up|down|increase|decrease)\s+(\d+\.?\d*)", cmd)
+        if not height_match:
+            return {"status": "error", "message": "Invalid command. Use 'set height up x' or 'set height down x', where x is a positive height value in meters."}
+        direction = height_match.group(1)
+        distance = height_match(float.group(2))
+        if distance <= 0:
+            return {"status":"error", "message": "Must be a positive height value even if it decreasing"}
+        if direction in ("up","increase"):
+            print("Command to increase height by {distance} meters understood")
+            worked = await increase_height(drone,distance,lock)
+        elif direction in ("down","decrease"):
+             print("Command to decrease height by {distance} meters understood")
+            worked = await decrease_height(drone,distance,lock)
+        if worked:
+            return{"status": "success", "executed": cmd}
+        return{"status":"error","message":"Failed to work"}
+            
+    
     elif cmd.startswith("throttle"):
         throttle_match = re.fullmatch(r"throttle\s+(\d+),\s*(\d+\.?\d*)", cmd)
         if throttle_match:
