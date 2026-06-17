@@ -63,7 +63,7 @@ async def process_command(drone, nc, cmd, lock):
                 clear_all_overrides(drone)
             return {"status": "error","executed": cmd,"reason": "Vehicle failed to arm"}
         try:
-            await movement_continuous(drone,duration=1.0,lock=lock,pitch_val=1400)
+            await movement(drone,duration=1.0,lock=lock,pitch_val=1400)
         finally:
             async with lock:
                 await disarm_vehicle(drone)
@@ -81,7 +81,7 @@ async def process_command(drone, nc, cmd, lock):
                 clear_all_overrides(drone)
             return {"status": "error","executed": cmd,"reason": "Vehicle failed to arm"}
         try:
-            await movement_continuous(drone,duration=1.0,lock=lock,throttle_val=1550)
+            await movement(drone,duration=1.0,lock=lock,throttle_val=1550)
         finally:
             async with lock:
                 await disarm_vehicle(drone)
