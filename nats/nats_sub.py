@@ -53,6 +53,12 @@ async def process_command(drone, nc, cmd, lock):
 	elif cmd == "fly up":
 		print("Command to fly up understood. Flying up.")
 		return {"status": "success", "executed": cmd}
+
+	elif cmd in ("clear overrides"):
+    print("Command to clear overrides understood. Clearing overrides")
+    async with lock:
+        clear_all_overrides(drone)
+    return {"status": "success", "executed": cmd}
 	
 	elif cmd.startswith("throttle"):
 		throttle_match = re.fullmatch(r"throttle\s+(\d+),\s*(\d+\.?\d*)", cmd)
@@ -67,6 +73,7 @@ async def process_command(drone, nc, cmd, lock):
 			await throttle_continuous(drone, pwm, duration, lock)
 			async with lock:
 				await disarm_vehicle(drone)
+				clear_all_overrides(drone)
 			return {"status": "success", "executed": cmd}
 		else:
 			return{"status": "error", "message": "Invalid throttle command. Must be entered in the form \'throttle x, y\', where \'x\' is the pwm value (an int between 1000 and 2000) and \'y\' is the duration (an int or float greater than 0)"}
