@@ -46,15 +46,15 @@ async def process_command(drone, nc, cmd, lock):
 
     if cmd == "telem":
         if telem_task is None or telem_task.done():
-            print("Starting telemetry stream...")
+            printf("Starting telemetry stream...")
             telem_task = asyncio.create_task(send_telem_stream(drone, nc, lock))
             return {"status": "success", "message": "Stream started"}
         else:
-            print("Telemetry stream already active.")
+            printf("Telemetry stream already active.")
             return {"status": "ignored", "message": "Stream already running"}
 
     elif cmd == "fly forward":
-        print("Command to fly forward understood. Flying forward.")
+        printf("Command to fly forward understood. Flying forward.")
         async with lock:
             set_mode(drone, "STABILIZE")
             armed = await arm_vehicle(drone)
@@ -72,7 +72,7 @@ async def process_command(drone, nc, cmd, lock):
         return {"status": "success", "executed": cmd}
 
     elif cmd == "fly up":
-        print("Command to fly up understood. Flying up.")
+        printf("Command to fly up understood. Flying up.")
         async with lock:
             set_mode(drone, "STABILIZE")
             armed = await arm_vehicle(drone)
@@ -89,15 +89,34 @@ async def process_command(drone, nc, cmd, lock):
                 clear_all_overrides(drone)
         return {"status": "success", "executed": cmd}
 
+    elif cmd == "takeoff": 
+        printf("Command to takeoff understood")
+        async with lock:
+            set_mode(drone,"STABILIZE")
+            armed = await arm_vehicle(drone)
+        if not armed:
+            async with lock:
+                await disarm_vehicle(drone)
+                clear_all_overrides(drone)
+            return {"status": "error", "executed": cmd, "reason": "Vehicle failed to arm"}
+        await asyncio.sleep(1.0)
+        worked = await increase_height(drone, 0.1, lock)
+        if worked: 
+            return{"status":"success","executed":cmd,"message":"Successful takeoff"}
+        async with lock:
+            clear_all_overrides(drone)
+        return {"status": "error", "executed": cmd, "message": "Takeoff failed or timed out. Drone may still be armed."}
+            
+    
     elif cmd == "disarm":
-        print("Command to disarm understood. Disarming.")
+        printf("Command to disarm understood. Disarming.")
         async with lock:
             await disarm_vehicle(drone)
             clear_all_overrides(drone)
         return{"status": "success", "executed": cmd}
 
     elif cmd in ("stop telem","stop telemetry"):
-        print("Command to stop telemetry understood. Stopping telemetry")
+        printf("Command to stop telemetry understood. Stopping telemetry")
         if telem_task is not None and not telem_task.done():
             telem_task.cancel()
             telem_task = None
@@ -106,7 +125,7 @@ async def process_command(drone, nc, cmd, lock):
         return{"status": "success", "executed": cmd}
 
     elif cmd == "clear overrides":
-        print("Command to clear overrides understood. Clearing overrides")
+        printf("Command to clear overrides understood. Clearing overrides")
         async with lock:
             clear_all_overrides(drone)
         return {"status": "success", "executed": cmd}
@@ -116,14 +135,14 @@ async def process_command(drone, nc, cmd, lock):
         if not height_match:
             return {"status": "error", "message": "Invalid command. Use 'set height up x' or 'set height down x', where x is a positive height value in meters."}
         direction = height_match.group(1)
-        distance = height_match(float.group(2))
+        distance = float(height_match.group(2))
         if distance <= 0:
             return {"status":"error", "message": "Must be a positive height value even if it decreasing"}
         if direction in ("up","increase"):
-            print("Command to increase height by {distance} meters understood")
+            printf("Command to increase height by {distance} meters understood")
             worked = await increase_height(drone,distance,lock)
         elif direction in ("down","decrease"):
-             print("Command to decrease height by {distance} meters understood")
+            printf("Command to decrease height by {distance} meters understood")
             worked = await decrease_height(drone,distance,lock)
         if worked:
             return{"status": "success", "executed": cmd}
@@ -173,7 +192,7 @@ async def main():
             request = json.loads(msg.data.decode())
             action = request.get("action")
         except json.JSONDecodeError:
-            print("Received invalid JSON. Ignoring.")
+            ("Received invalid JSON. Ignoring.")
             return
 
         response_payload = await process_command(drone, nc, action, drone_lock)
@@ -181,7 +200,7 @@ async def main():
             await msg.respond(json.dumps(response_payload).encode())
 
     sub = await nc.subscribe("drone", cb=message_handler)
-    print(f"Subscribed to 'drone', waiting for messages...")
+    (f"Subscribed to 'drone', waiting for messages...")
 
     # Keep the connection alive to receive messages
     try:
