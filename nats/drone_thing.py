@@ -2,7 +2,7 @@ from pymavlink import mavutil
 import math
 import time
 import asyncio
-global STARTING_ALT = None
+STARTING_ALT = None
 async def initialize_telem(drone):
     print("Waiting for heartbeat...")
     try:
@@ -103,8 +103,9 @@ def set_mode(drone, mode):
     print(f"Switching to {mode} mode...")
 
 async def starting_alt(drone, lock): #get the starting height and set to a global variable
+    global STARTING_ALT
     if STARTING_ALT is not None:
-        printf("Starting altitude is already set at {STARTING_ALT}m")
+        print(f"Starting altitude is already set at {STARTING_ALT}m")
         return STARTING_ALT
     print("Finding starting altitude")
     async with lock:
@@ -120,11 +121,66 @@ async def starting_alt(drone, lock): #get the starting height and set to a globa
         return None
     else:
         STARTING_ALT = start_alt
-        printf("Sucessfully extracted starting altitude which is set to {start_alt} m")
+        print(f"Sucessfully extracted starting altitude which is set to {start_alt} m")
         return STARTING_ALT
 
+def gps_offset_meters(lat, lon, distance_m, bearing_deg):
+    R = 6371000  # Earth radius in meters
+
+    lat1 = math.radians(lat)
+    lon1 = math.radians(lon)
+    bearing = math.radians(bearing_deg)
+
+    angular_distance = distance_m / R
+
+    lat2 = math.asin(
+        math.sin(lat1) * math.cos(angular_distance)
+        + math.cos(lat1) * math.sin(angular_distance) * math.cos(bearing)
+    )
+
+    lon2 = lon1 + math.atan2(
+        math.sin(bearing) * math.sin(angular_distance) * math.cos(lat1),
+        math.cos(angular_distance) - math.sin(lat1) * math.sin(lat2)
+    )
+
+    return math.degrees(lat2), math.degrees(lon2)
+
+def distance_between_points(lat1,long1,lat2,long2):
+    lat1 = math.radians(lat1)
+    lon1 = math.radians(lon1)
+    lat2 = math.radians(lat2)
+    lon2 = math.radians(lon2)
+
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    )
+
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    return R * c
+
+def send_guided_position_target(drone, lat, lon, alt):
+    drone.mav.set_position_target_global_int_send(
+        0,
+        drone.target_system,
+        drone.target_component,
+        mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+        3576,  # use position only
+        int(lat * 1e7),
+        int(lon * 1e7),
+        alt,
+        0, 0, 0,
+        0, 0, 0,
+        0,
+        0
+    )
+    
 async def current_height(drone, lock): #get the current height helper function
-     print("Finding current altitude")
+    print("Finding current altitude")
     async with lock:
         t = await get_telem(drone)
     if t is None:
@@ -137,8 +193,11 @@ async def current_height(drone, lock): #get the current height helper function
         print("Unable to real precise current altitude")
         return None
     else:
-        printf("Sucessfully extracted current altitude which is set to {current_alt} m")
+        print(f"Sucessfully extracted current altitude which is set to {current_alt} m")
         return current_alt
+
+async def move_forward(drone, distance, lock):
+    
     
 async def increase_height(drone, target_height, lock, throttle_val=1550, timeout=10): #To increase the height in meters
     refference_alt = await current_height(drone, lock)
@@ -148,16 +207,16 @@ async def increase_height(drone, target_height, lock, throttle_val=1550, timeout
     start_time = time.time()
 
     while time.time()-start_time < timeout:
-        current_alt = await get_current_altitude_mm(drone, lock)
+        current_alt = await current_height(drone, lock)
 
         if current_alt is None:
             await asyncio.sleep(0.1)
             continue
     
         delta_alt = current_alt - refference_alt
-        prinft("Drone being moved {delta_alt}m")
+        print(f"Drone being moved {delta_alt}m")
         if delta_alt >= target_height:
-            printf("Increase of {delta_alt} has been achived")
+            print(f"Increase of {delta_alt} has been achived")
             async with lock:
                 clear_all_overrides(drone)
             return True
@@ -166,7 +225,14 @@ async def increase_height(drone, target_height, lock, throttle_val=1550, timeout
     async with lock:
         clear_all_overrides(drone)
     return False
-    
+
+async def hold_pos(drone,lock): # Keeps pitch, yaw, roll and altitude all constant
+    print("Switching to lotier mode")
+    async with lock:
+        set_mode(drone,"LOITER")
+        clear_all_overrides(drone)
+    return True
+
 async def decrease_height(drone, target_height, lock, throttle_val=1450, timeout=10): #To decrease the height in meters
     refference_alt = await current_height(drone, lock)
     if refference_alt is None:
@@ -175,16 +241,16 @@ async def decrease_height(drone, target_height, lock, throttle_val=1450, timeout
     start_time = time.time()
 
     while time.time()-start_time < timeout:
-        current_alt = await get_current_altitude_mm(drone, lock)
+        current_alt = await current_height(drone, lock)
 
         if current_alt is None:
             await asyncio.sleep(0.1)
             continue
     
         delta_alt = refference_alt - current_alt
-        prinft("Drone being moved {delta_alt}m")
-        if delta_alt <= target_height:
-            printf("Decrease of {delta_alt} has been achived")
+        print(f"Drone being moved {delta_alt}m")
+        if delta_alt >= target_height:
+            print(f"Decrease of {delta_alt} has been achived")
             async with lock:
                 clear_all_overrides(drone)
             return True
