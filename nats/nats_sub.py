@@ -61,20 +61,10 @@ async def process_command(drone, nc, cmd, lock):
         distance = float(move_match.group(2))
         if distance <= 0:
             return {"status":"error", "message": "Must be a positive distance value even if it moves backwards"}
-        if direction == "forward":
-            print(f"Command to move forward by {distance} meters understood")
-            worked = await move_forward(drone,distance,lock)
-        elif direction == "back":
-            print(f"Command to move backwards by {distance} meters understood")
-            worked = await move_back(drone,distance,lock)
-        elif direction == "left":
-            print(f"Command to move to the left by {distance} meters understood")
-            worked = await move_left(drone,distance,lock)
-        elif direction == "right":
-            print(f"Command to move to the right by {distance} meters understood")
-            worked = await move_right(drone,distance,lock)
+        print(f"Command to move {direction} by {distance} meters understood")
+        worked = await move_rel(drone,direction,distance,lock)
+         await hold_pos(drone,lock) #drone will loiter no matter what
         if worked:
-            await hold_pos(drone,lock)
             return{"status": "success", "executed": cmd}
         return{"status": "error", "executed": cmd}
 
@@ -110,7 +100,7 @@ async def process_command(drone, nc, cmd, lock):
         worked = await increase_height(drone, 0.1, lock)
         if worked: 
             await hold_pos(drone, lock)
-             async with lock:
+            async with lock:
                 clear_all_overrides(drone)
             return {"status": "success", "executed": cmd, "message": "Successful takeoff, now loitering"}
         return {"status": "error", "executed": cmd, "message": "Takeoff failed or timed out. Drone may still be armed."}
@@ -147,13 +137,13 @@ async def process_command(drone, nc, cmd, lock):
         if distance <= 0:
             return {"status":"error", "message": "Must be a positive height value even if it decreasing"}
         if direction in ("up","increase"):
-            print("Command to increase height by {distance} meters understood")
+            print(f"Command to increase height by {distance} meters understood")
             worked = await increase_height(drone,distance,lock)
         elif direction in ("down","decrease"):
-            print("Command to decrease height by {distance} meters understood")
+            print(f"Command to decrease height by {distance} meters understood")
             worked = await decrease_height(drone,distance,lock)
+        await hold_pos(drone,lock)
         if worked:
-            await hold_pos(drone,lock)
             return{"status": "success", "executed": cmd}
         return{"status":"error","message":"Failed to work"}
             
@@ -201,7 +191,7 @@ async def main():
             request = json.loads(msg.data.decode())
             action = request.get("action")
         except json.JSONDecodeError:
-            ("Received invalid JSON. Ignoring.")
+            print("Received invalid JSON. Ignoring.")
             return
 
         response_payload = await process_command(drone, nc, action, drone_lock)
@@ -209,7 +199,7 @@ async def main():
             await msg.respond(json.dumps(response_payload).encode())
 
     sub = await nc.subscribe("drone", cb=message_handler)
-    (f"Subscribed to 'drone', waiting for messages...")
+    print(f"Subscribed to 'drone', waiting for messages...")
 
     # Keep the connection alive to receive messages
     try:
