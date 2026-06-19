@@ -200,9 +200,6 @@ async def current_height(drone, lock): #get the current height helper function
 
 async def move_gps(drone, target_lat, target_lon, target_alt,lock,timeout,accept_radius): #Movement based on gps coords
     print(f"Moving to GPS target: "f"lat={target_lat}, lon={target_lon}, alt={target_alt} m")
-    async with lock:
-        clear_all_overrides(drone)
-        set_mode(drone, "GUIDED")
     start_time = time.time()
     while time.time() - start_time < timeout:
         async with lock:
