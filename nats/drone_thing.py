@@ -145,7 +145,8 @@ def gps_offset_meters(lat, lon, distance_m, bearing_deg):
 
     return math.degrees(lat2), math.degrees(lon2)
 
-def distance_between_points(lat1,long1,lat2,long2):
+def distance_between_points(lat1,lon1,lat2,lon2):
+    R = 6371000
     lat1 = math.radians(lat1)
     lon1 = math.radians(lon1)
     lat2 = math.radians(lat2)
@@ -162,22 +163,23 @@ def distance_between_points(lat1,long1,lat2,long2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
     return R * c
-
-def send_guided_position_target(drone, lat, lon, alt):
+    
+def send_gps_target(drone, target_lat, target_lon, target_alt):
     drone.mav.set_position_target_global_int_send(
         0,
         drone.target_system,
         drone.target_component,
         mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-        3576,  # use position only
-        int(lat * 1e7),
-        int(lon * 1e7),
-        alt,
+        3576,
+        int(target_lat * 1e7),
+        int(target_lon * 1e7),
+        target_alt,
         0, 0, 0,
         0, 0, 0,
         0,
         0
     )
+
     
 async def current_height(drone, lock): #get the current height helper function
     print("Finding current altitude")
@@ -196,7 +198,73 @@ async def current_height(drone, lock): #get the current height helper function
         print(f"Sucessfully extracted current altitude which is set to {current_alt} m")
         return current_alt
 
-async def move_forward(drone, distance, lock):
+async def move_gps(drone, target_lat, target_lon, target_alt,lock,timeout,accept_radius): #Movement based on gps coords
+    print(f"Moving to GPS target: "f"lat={target_lat}, lon={target_lon}, alt={target_alt} m")
+    async with lock:
+        clear_all_overrides(drone)
+        set_mode(drone, "GUIDED")
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        async with lock:
+            drone.mav.set_position_target_global_int_send(
+                0,
+                drone.target_system,
+                drone.target_component,
+                mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+                3576,
+                int(target_lat * 1e7),
+                int(target_lon * 1e7),
+                target_alt,
+                0, 0, 0,
+                0, 0, 0,
+                0,
+                0)
+        await asyncio.sleep(0.5)
+        async with lock:
+            telemetry = await get_telem(drone)
+        if telemetry is None:
+            continue
+        current_lat = telemetry["lat"]
+        current_lon = telemetry["lon"]
+        if current_lat == -1 or current_lon == -1:
+            continue
+        remaining_distance = distance_between_points(current_lat,current_lon,target_lat,target_lon)
+        print(f"Distance remaining: {remaining_distance} m")
+        if remaining_distance <= accept_radius:
+            print("GPS target reached")
+            return True
+    print("GPS movement timed out")
+    return False
+
+
+async def move_rel(drone, direction, distance, lock): #Movement based on distance and direction
+    async with lock:
+        telemetry = await get_telem(drone)
+    if telemetry is None:
+        print("Could not obtain telemetry")
+        return False
+    current_lat = telemetry["lat"]
+    current_lon = telemetry["lon"]
+    current_alt = telemetry["alt"]
+    current_heading = telemetry["hdg"]
+    if (current_lat == -1 or current_lon == -1 or current_alt == -1 or current_heading == -1):
+        print("Invalid GPS, altitude, or heading data")
+        return False
+    direction_offsets = {
+        "forward": 0,
+        "right": 90,
+        "back": 180,
+        "left": -90
+    }
+    if direction not in direction_offsets:
+        print(f"Unknown movement direction: {direction}")
+        return False
+    target_bearing = (current_heading + direction_offsets[direction]) % 360
+    target_lat, target_lon = gps_offset_meters(current_lat,current_lon,distance,target_bearing)
+    print(f"Current heading: {current_heading}°")
+    print(f"Movement bearing: {target_bearing}°")
+    print(f"Target GPS: {target_lat}, {target_lon}")
+    return await move_gps(drone,target_lat,target_lon,current_alt,lock,20, min(1.0, distance * 0.25))
     
     
 async def increase_height(drone, target_height, lock, throttle_val=1550, timeout=10): #To increase the height in meters
