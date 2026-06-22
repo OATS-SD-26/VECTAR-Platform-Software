@@ -3,25 +3,21 @@ import math
 import time
 import asyncio
 STARTING_ALT = None
+
 async def initialize_telem(drone):
     print("Waiting for heartbeat...")
     try:
         while True:
-            msg = drone.recv_match(type='HEARTBEAT', blocking=False)
+            msg = drone.recv_match(type="HEARTBEAT", blocking=False)
             if msg:
-                print("Heartbeat from system (system %u component %u)" % (drone.target_system, drone.target_component))
-                drone.mav.request_data_stream_send(
-                    drone.target_system,
-                    drone.target_component,
-                    mavutil.mavlink.MAV_DATA_STREAM_EXTRA1,
-                    10,  # Hz
-                    1
-                )
-                return
+                print(f"Heartbeat from system {drone.target_system}, component {drone.target_component}")
+                drone.mav.request_data_stream_send(drone.target_system, drone.target_component, mavutil.mavlink.MAV_DATA_STREAM_EXTRA1, 10, 1)
+                drone.mav.request_data_stream_send(drone.target_system, drone.target_component, mavutil.mavlink.MAV_DATA_STREAM_POSITION, 10, 1)
+                return True
             await asyncio.sleep(0.1)
-    except Exception as e:
-        print(f"Error initializing telemetry: {e}")
-        return
+    except Exception as error:
+        print(f"Error initializing telemetry: {error}")
+        return False
 
 async def get_telem(drone):
     # Send heartbeat so ArduPilot knows we are still connected
@@ -51,7 +47,10 @@ async def get_telem(drone):
                         "lat": msg.lat / 1e7,  # degrees
                         "lon": msg.lon / 1e7,  # degrees
                         "alt": msg.relative_alt / 1e3,  # meters above home
-                        "hdg": msg.hdg / 100.0,  # degrees (0-360)
+                        "hdg": (-1
+                                if msg.hdg == 65535
+                                else msg.hdg / 100.0
+                               ),
                     }
 
             if attitude and position:
@@ -198,24 +197,18 @@ async def current_height(drone, lock): #get the current height helper function
         print(f"Sucessfully extracted current altitude which is set to {current_alt} m")
         return current_alt
 
-async def move_gps(drone, target_lat, target_lon, target_alt,lock,timeout,accept_radius): #Movement based on gps coords
-    print(f"Moving to GPS target: "f"lat={target_lat}, lon={target_lon}, alt={target_alt} m")
-    start_time = time.time()
-    while time.time() - start_time < timeout:
+def calculate_horizontal_accept_radius(distance):
+    return min(1.0, distance * 0.25)
+
+def calculate_vertical_accept_radius(height_change):
+    return min(0.3, height_change * 0.25)
+
+async def move_gps(drone, target_lat, target_lon, target_alt, lock, timeout, horizontal_accept_radius, vertical_accept_radius):
+    print(f"Moving to GPS target: lat={target_lat}, lon={target_lon}, alt={target_alt} m")
+    start_time = time.monotonic()
+    while time.monotonic() - start_time < timeout:
         async with lock:
-            drone.mav.set_position_target_global_int_send(
-                0,
-                drone.target_system,
-                drone.target_component,
-                mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-                3576,
-                int(target_lat * 1e7),
-                int(target_lon * 1e7),
-                target_alt,
-                0, 0, 0,
-                0, 0, 0,
-                0,
-                0)
+            send_gps_target(drone, target_lat, target_lon, target_alt)
         await asyncio.sleep(0.5)
         async with lock:
             telemetry = await get_telem(drone)
@@ -223,18 +216,23 @@ async def move_gps(drone, target_lat, target_lon, target_alt,lock,timeout,accept
             continue
         current_lat = telemetry["lat"]
         current_lon = telemetry["lon"]
-        if current_lat == -1 or current_lon == -1:
+        current_alt = telemetry["alt"]
+        if current_lat == -1 or current_lon == -1 or current_alt == -1:
+            print("Waiting for valid position telemetry")
             continue
-        remaining_distance = distance_between_points(current_lat,current_lon,target_lat,target_lon)
-        print(f"Distance remaining: {remaining_distance} m")
-        if remaining_distance <= accept_radius:
+        horizontal_error = distance_between_points(current_lat, current_lon, target_lat, target_lon)
+        vertical_error = abs(current_alt - target_alt)
+        print(f"Horizontal error: {horizontal_error:.2f} m | Vertical error: {vertical_error:.2f} m")
+        if horizontal_error <= horizontal_accept_radius and vertical_error <= vertical_accept_radius:
             print("GPS target reached")
             return True
     print("GPS movement timed out")
     return False
 
-
-async def move_rel(drone, direction, distance, lock): #Movement based on distance and direction
+async def move_rel(drone, direction, distance, lock):
+    if distance <= 0:
+        print("Movement distance must be positive")
+        return False
     async with lock:
         telemetry = await get_telem(drone)
     if telemetry is None:
@@ -244,86 +242,71 @@ async def move_rel(drone, direction, distance, lock): #Movement based on distanc
     current_lon = telemetry["lon"]
     current_alt = telemetry["alt"]
     current_heading = telemetry["hdg"]
-    if (current_lat == -1 or current_lon == -1 or current_alt == -1 or current_heading == -1):
+    if current_lat == -1 or current_lon == -1 or current_alt == -1 or current_heading == -1:
         print("Invalid GPS, altitude, or heading data")
         return False
-    direction_offsets = {
-        "forward": 0,
-        "right": 90,
-        "back": 180,
-        "left": -90
-    }
+    direction_offsets = {"forward": 0, "right": 90, "back": 180, "left": -90}
     if direction not in direction_offsets:
         print(f"Unknown movement direction: {direction}")
         return False
     target_bearing = (current_heading + direction_offsets[direction]) % 360
-    target_lat, target_lon = gps_offset_meters(current_lat,current_lon,distance,target_bearing)
+    target_lat, target_lon = gps_offset_meters(current_lat, current_lon, distance, target_bearing)
+    horizontal_accept_radius = calculate_horizontal_accept_radius(distance)
     print(f"Current heading: {current_heading}°")
     print(f"Movement bearing: {target_bearing}°")
     print(f"Target GPS: {target_lat}, {target_lon}")
-    return await move_gps(drone,target_lat,target_lon,current_alt,lock,20, min(1.0, distance * 0.25))
-    
-    
-async def increase_height(drone, target_height, lock, throttle_val=1550, timeout=10): #To increase the height in meters
-    refference_alt = await current_height(drone, lock)
-    if refference_alt is None:
-        print("Could not get current height")
-        return None
-    start_time = time.time()
+    return await move_gps(drone, target_lat, target_lon, current_alt, lock, 20, horizontal_accept_radius, 0.3)
 
-    while time.time()-start_time < timeout:
-        current_alt = await current_height(drone, lock)
+async def increase_height(drone, target_height, lock, timeout=20):
+    if target_height <= 0:
+        print("Height increase must be positive")
+        return False
+    async with lock:
+        telemetry = await get_telem(drone)
+    if telemetry is None:
+        print("Could not obtain telemetry")
+        return False
+    current_lat = telemetry["lat"]
+    current_lon = telemetry["lon"]
+    current_alt = telemetry["alt"]
+    if current_lat == -1 or current_lon == -1 or current_alt == -1:
+        print("Invalid GPS or altitude data")
+        return False
+    target_alt = current_alt + target_height
+    vertical_accept_radius = calculate_vertical_accept_radius(target_height)
 
-        if current_alt is None:
-            await asyncio.sleep(0.1)
-            continue
-    
-        delta_alt = current_alt - refference_alt
-        print(f"Drone being moved {delta_alt}m")
-        if delta_alt >= target_height:
-            print(f"Increase of {delta_alt} has been achived")
-            async with lock:
-                clear_all_overrides(drone)
-            return True
-        await movement(drone,duration=0.2,lock=lock,throttle_val=throttle_val)
-    print("Increase height timeout has been reached")
+    print(f"Increasing altitude from {current_alt:.2f} m to {target_alt:.2f} m")
+    return await move_gps(drone, current_lat, current_lon, target_alt, lock, timeout, 1.0, vertical_accept_radius)
+
+async def hold_pos(drone, lock):
+    print("Switching to loiter mode")
     async with lock:
         clear_all_overrides(drone)
-    return False
-
-async def hold_pos(drone,lock): # Keeps pitch, yaw, roll and altitude all constant
-    print("Switching to lotier mode")
-    async with lock:
-        set_mode(drone,"LOITER")
-        clear_all_overrides(drone)
+        set_mode(drone, "LOITER")
     return True
 
-async def decrease_height(drone, target_height, lock, throttle_val=1450, timeout=10): #To decrease the height in meters
-    refference_alt = await current_height(drone, lock)
-    if refference_alt is None:
-        print("Could not get current height")
-        return None
-    start_time = time.time()
-
-    while time.time()-start_time < timeout:
-        current_alt = await current_height(drone, lock)
-
-        if current_alt is None:
-            await asyncio.sleep(0.1)
-            continue
-    
-        delta_alt = refference_alt - current_alt
-        print(f"Drone being moved {delta_alt}m")
-        if delta_alt >= target_height:
-            print(f"Decrease of {delta_alt} has been achived")
-            async with lock:
-                clear_all_overrides(drone)
-            return True
-        await movement(drone,duration=0.2,lock=lock,throttle_val=throttle_val)
-    print("Decrease height timeout has been reached")
+async def decrease_height(drone, target_height, lock, timeout=20):
+    if target_height <= 0:
+        print("Height decrease must be positive")
+        return False
     async with lock:
-        clear_all_overrides(drone)
-    return False
+        telemetry = await get_telem(drone)
+    if telemetry is None:
+        print("Could not obtain telemetry")
+        return False
+    current_lat = telemetry["lat"]
+    current_lon = telemetry["lon"]
+    current_alt = telemetry["alt"]
+    if current_lat == -1 or current_lon == -1 or current_alt == -1:
+        print("Invalid GPS or altitude data")
+        return False
+    target_alt = current_alt - target_height
+    if target_alt <= 0:
+        print("Target altitude is at or below home altitude; use the landing command instead")
+        return False
+    vertical_accept_radius = calculate_vertical_accept_radius(target_height)
+    print(f"Decreasing altitude from {current_alt:.2f} m to {target_alt:.2f} m")
+    return await move_gps(drone, current_lat, current_lon, target_alt, lock, timeout, 1.0, vertical_accept_radius)
 
 async def arm_vehicle(drone, timeout=10):
     print("Sending arming command...")
