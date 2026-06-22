@@ -62,8 +62,11 @@ async def process_command(drone, nc, cmd, lock):
         if distance <= 0:
             return {"status":"error", "message": "Must be a positive distance value even if it moves backwards"}
         print(f"Command to move {direction} by {distance} meters understood")
+        async with lock:
+            clear_all_overrides(drone)
+            set_mode(drone, "GUIDED")
         worked = await move_rel(drone,direction,distance,lock)
-         await hold_pos(drone,lock) #drone will loiter no matter what
+        await hold_pos(drone,lock) #drone will loiter no matter what
         if worked:
             return{"status": "success", "executed": cmd}
         return{"status": "error", "executed": cmd}
@@ -71,8 +74,8 @@ async def process_command(drone, nc, cmd, lock):
     elif cmd == "fly up": #use for testing, will remove later
         print("Command to fly up understood. Flying up.")
         async with lock:
-            set_mode(drone, "STABILIZE")
             armed = await arm_vehicle(drone)
+            set_mode(drone, "GUIDED")
         if not armed:
             async with lock:
                 await disarm_vehicle(drone)
@@ -80,17 +83,15 @@ async def process_command(drone, nc, cmd, lock):
             return {"status": "error","executed": cmd,"reason": "Vehicle failed to arm"}
         try:
             await movement(drone,duration=1.0,lock=lock,throttle_val=1550)
-        finally:
-            async with lock:
-                clear_all_overrides(drone)
             await hold_pos(drone,lock)
-        return {"status": "success", "executed": cmd}
+        finally:
+            return {"status": "success", "executed": cmd}
 
     elif cmd == "takeoff": 
         print("Command to takeoff understood")
         async with lock:
-            set_mode(drone,"STABILIZE")
             armed = await arm_vehicle(drone)
+            set_mode(drone,"GUIDED")
         if not armed:
             async with lock:
                 await disarm_vehicle(drone)
@@ -98,8 +99,8 @@ async def process_command(drone, nc, cmd, lock):
             return {"status": "error", "executed": cmd, "reason": "Vehicle failed to arm"}
         await asyncio.sleep(1.0)
         worked = await increase_height(drone, 0.1, lock)
+        await hold_pos(drone, lock)
         if worked: 
-            await hold_pos(drone, lock)
             async with lock:
                 clear_all_overrides(drone)
             return {"status": "success", "executed": cmd, "message": "Successful takeoff, now loitering"}
@@ -129,25 +130,27 @@ async def process_command(drone, nc, cmd, lock):
         return {"status": "success", "executed": cmd}
     
     elif cmd.startswith("set height"):
-        height_match = re.fullmatch(r"set height\s+(up|down|increase|decrease)\s+(\d+\.?\d*)", cmd)
+        height_match = re.fullmatch(r"set height\s+(up|down|increase|decrease)\s+(\d+\.?\d*)",cmd)
         if not height_match:
-            return {"status": "error", "message": "Invalid command. Use 'set height up x' or 'set height down x', where x is a positive height value in meters."}
+            return {"status": "error","message": ("Invalid command. Use 'set height up x' or 'set height down x'.")}
         direction = height_match.group(1)
         distance = float(height_match.group(2))
         if distance <= 0:
-            return {"status":"error", "message": "Must be a positive height value even if it decreasing"}
-        if direction in ("up","increase"):
-            print(f"Command to increase height by {distance} meters understood")
-            worked = await increase_height(drone,distance,lock)
-        elif direction in ("down","decrease"):
-            print(f"Command to decrease height by {distance} meters understood")
-            worked = await decrease_height(drone,distance,lock)
-        await hold_pos(drone,lock)
-        if worked:
-            return{"status": "success", "executed": cmd}
-        return{"status":"error","message":"Failed to work"}
-            
-    
+            return {"status": "error","message": "Height change must be positive."}
+        async with lock:
+            clear_all_overrides(drone)
+            set_mode(drone, "GUIDED")
+            if direction in ("up", "increase"):
+                print(f"Command to increase height by {distance} meters understood")
+                worked = await increase_height(drone,distance,lock)
+            else:
+                print(f"Command to decrease height by {distance} meters understood")
+                worked = await decrease_height(drone,distance,lock)
+            await hold_pos(drone, lock)
+            if worked:
+                return {"status": "success","executed": cmd,"message": "Height changed; drone is now loitering"}
+                return {"status": "error","executed": cmd,"message": ("Height movement failed or timed out; ""drone was instructed to loiter")}
+        
     elif cmd.startswith("throttle"):
         throttle_match = re.fullmatch(r"throttle\s+(\d+),\s*(\d+\.?\d*)", cmd)
         if throttle_match:
