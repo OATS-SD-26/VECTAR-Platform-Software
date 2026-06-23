@@ -545,22 +545,11 @@ async def land_at_position(drone, lock, target_position=None, approach_timeout=3
             current_alt = telemetry["alt"]
             received_valid_altitude = True
 
-            print(
-                f"Landing altitude: {current_alt:.2f} m | "
-                f"Stored ground altitude: {target_ground_alt:.2f} m"
-            )
+            print(f"Landing altitude: {current_alt:.2f} m | "f"Stored ground altitude: {target_ground_alt:.2f} m")
 
         if not armed:
-            return {
-                "status": "success",
-                "reason": "landing_complete",
-                "message": "Vehicle landed and disarmed at the target position.",
-                "airborne": False,
-                "target_lat": target_lat,
-                "target_lon": target_lon,
-                "current_alt": current_alt
-            }
-
+            STARTING_POSITION = None
+            return {"status": "success","reason": "landing_complete","message": "Vehicle landed and disarmed at the target position.","airborne": False,"target_lat": target_lat,"target_lon": target_lon,"current_alt": current_alt}
         await asyncio.sleep(0.2)
 
     if not received_valid_altitude:
@@ -570,16 +559,8 @@ async def land_at_position(drone, lock, target_position=None, approach_timeout=3
         reason = "landing_timeout"
         message = "Vehicle did not confirm landing and disarming before the timeout."
 
-    return {
-        "status": "error",
-        "reason": reason,
-        "message": message,
-        "airborne": True,
-        "target_lat": target_lat,
-        "target_lon": target_lon,
-        "current_alt": current_alt
-    }
-    
+    return {"status": "error","reason": reason,"message": message,"airborne": True,"target_lat": target_lat,"target_lon": target_lon,"current_alt": current_alt}
+
 
 async def disarm_vehicle(drone, timeout=5):
     print("Sending normal disarm command...")
