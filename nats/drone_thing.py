@@ -325,12 +325,103 @@ async def arm_vehicle(drone, timeout=10):
         0, 0, 0, 0, 0, 0
     )
 
+    async def takeoff_vehicle(drone, lock, takeoff_height=1.0, timeout=20, ack_timeout=3):
+    if takeoff_height <= 0:
+        return {"status": "error", "reason": "invalid_takeoff_height", "message": "Takeoff height must be positive.", "airborne": False}
+    start_alt = await starting_alt(drone, lock)
+    if start_alt is None or start_alt == -1:
+        return {"status": "error", "reason": "starting_altitude_unavailable", "message": "Could not obtain a valid starting altitude.", "airborne": False}
+    target_alt = start_alt + takeoff_height
+    vertical_accept_radius = calculate_vertical_accept_radius(takeoff_height)
+    print(f"Starting altitude: {start_alt:.2f} m")
+    print(f"Takeoff target: {target_alt:.2f} m")
+    print(f"Vertical acceptance radius: {vertical_accept_radius:.2f} m")
+    async with lock:
+        armed = await arm_vehicle(drone)
+        if not armed:
+            return {"status": "error", "reason": "arming_failed", "message": "Vehicle could not be armed.", "airborne": False, "start_alt": start_alt, "target_alt": target_alt}
+        drone.mav.command_long_send(
+            drone.target_system,
+            drone.target_component,
+            mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
+            0,
+            0,
+            0,
+            0,
+            float("nan"),
+            0,
+            0,
+            target_alt
+        )
+        print(f"Takeoff command sent for {target_alt:.2f} m above home")
+        ack_result = None
+        ack_start = time.monotonic()
+        while time.monotonic() - ack_start < ack_timeout:
+            ack = drone.recv_match(type="COMMAND_ACK", blocking=False)
+            if ack and ack.command == mavutil.mavlink.MAV_CMD_NAV_TAKEOFF:
+                ack_result = ack.result
+                break
+            await asyncio.sleep(0.1)
+    accepted_results = (mavutil.mavlink.MAV_RESULT_ACCEPTED,mavutil.mavlink.MAV_RESULT_IN_PROGRESS)
+
+    if ack_result is not None and ack_result not in accepted_results:
+        ack_messages = {
+            mavutil.mavlink.MAV_RESULT_TEMPORARILY_REJECTED: "ArduPilot temporarily rejected the takeoff command.",
+            mavutil.mavlink.MAV_RESULT_DENIED: "ArduPilot denied the takeoff command.",
+            mavutil.mavlink.MAV_RESULT_UNSUPPORTED: "ArduPilot reported that the takeoff command is unsupported.",
+            mavutil.mavlink.MAV_RESULT_FAILED: "ArduPilot reported that the takeoff command failed.",
+            mavutil.mavlink.MAV_RESULT_CANCELLED: "The takeoff command was cancelled."
+        }
+        return {"status": "error","reason": "takeoff_rejected","message": ack_messages.get(ack_result, f"Takeoff was rejected with MAVLink result {ack_result}."),
+            "ack_result": ack_result,"airborne": False,"start_alt": start_alt,"target_alt": target_alt}
+
+    if ack_result is None:
+        print("No takeoff acknowledgement received; monitoring altitude anyway")
+    else:
+        print(f"Takeoff command accepted with MAVLink result {ack_result}")
+
+    monitor_start = time.monotonic()
+    current_alt = start_alt
+    received_valid_altitude = False
+    climbed = False
+
+    while time.monotonic() - monitor_start < timeout:
+        async with lock:
+            telemetry = await get_telem(drone)
+            armed = drone.motors_armed()
+        if telemetry is None or telemetry["alt"] == -1:
+            await asyncio.sleep(0.2)
+            continue
+        received_valid_altitude = True
+        current_alt = telemetry["alt"]
+        if current_alt >= start_alt + vertical_accept_radius:
+            climbed = True
+        print(f"Takeoff altitude: {current_alt:.2f} m / {target_alt:.2f} m")
+        if not armed:
+            return {"status": "error","reason": "disarmed_during_takeoff","message": "Vehicle became disarmed during takeoff.","airborne": climbed,
+                "start_alt": start_alt,"target_alt": target_alt,"current_alt": current_alt,"ack_result": ack_result}
+        
+        if current_alt >= target_alt - vertical_accept_radius:
+            return {"status": "success","reason": "takeoff_complete" if ack_result is not None else "takeoff_complete_no_ack","message": "Preset takeoff altitude reached.",
+                    "airborne": True,"start_alt": start_alt,"target_alt": target_alt,"current_alt": current_alt,"ack_result": ack_result}
+        await asyncio.sleep(0.2)
+
+    if not received_valid_altitude:
+        reason = "takeoff_telemetry_unavailable"
+        message = "No valid altitude telemetry was received during takeoff."
+    elif climbed:
+        reason = "takeoff_timeout_airborne"
+        message = "Vehicle climbed but did not reach the preset takeoff altitude."
+    else:
+        reason = "takeoff_timeout_grounded"
+        message = "Takeoff timed out without detecting a climb."
+
+    return {
+        "status": "error","reason": reason,"message": message,"airborne": climbed,"start_alt": start_alt,
+        "target_alt": target_alt,"current_alt": current_alt,"ack_result": ack_result}
     # Wait until the vehicle acknowledges it is armed
     print("Waiting for vehicle to arm...")
-
     start_time = time.time()
-
-    # drone.motors_armed_wait() # Don't want to use this since it's not async-friendly
     # arming has a timeout before it calls itself again, allows for no flying commands to work without having to be armed
     while time.time() - start_time < timeout:
         msg = drone.recv_match(type='HEARTBEAT', blocking=False)
@@ -339,7 +430,6 @@ async def arm_vehicle(drone, timeout=10):
                 print("VEHICLE ARMED!")
                 return True
         await asyncio.sleep(0.1)  # Give NATS control back in between checks for arm
-
     print("VEHCILE NOT ABLE TO BE ARMED!")
     return False
 
