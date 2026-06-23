@@ -35,7 +35,7 @@ async def process_command(drone, nc, cmd, lock, movement_lock):
     global telem_task
 
     if cmd is None:
-        return{"status": "error","message": "Missing command"}
+        return {"status": "error", "message": "Missing command"}
 
     cmd = cmd.strip().lower()
 
@@ -48,118 +48,148 @@ async def process_command(drone, nc, cmd, lock, movement_lock):
             print("Telemetry stream already active.")
             return {"status": "ignored", "message": "Stream already running"}
 
-   elif cmd.startswith("move"):
-    move_match = re.fullmatch(r"move\s+(forward|back|left|right)\s+(\d+\.?\d*)", cmd)
-    if not move_match:
-        return {"status": "error", "message": "Use 'move forward 5', 'move back 5', 'move left 5', or 'move right 5'."}
-    direction = move_match.group(1)
-    distance = float(move_match.group(2))
-    if distance <= 0:
-        return {"status": "error", "message": "Movement distance must be positive."}
-    print(f"Command to move {direction} by {distance} meters understood")
-    async with movement_lock:
-        async with lock:
-            clear_all_overrides(drone)
-            guided = await set_mode(drone, "GUIDED")
-        if not guided:
-            return {"status": "error", "executed": cmd, "message": "GUIDED mode was not confirmed."}
-        worked = await move_rel(drone, direction, distance, lock)
-        loitered = await hold_pos(drone, lock)
-    if worked and loitered:
-        return {"status": "success", "executed": cmd, "message": "Movement completed; drone is now loitering."}
-    return {"status": "error", "executed": cmd, "message": "Movement failed or timed out; LOITER was requested."}
+    elif cmd.startswith("move"):
+        move_match = re.fullmatch(r"move\s+(forward|back|left|right)\s+(\d+\.?\d*)", cmd)
+
+        if not move_match:
+            return {"status": "error", "message": "Use 'move forward 5', 'move back 5', 'move left 5', or 'move right 5'."}
+
+        direction = move_match.group(1)
+        distance = float(move_match.group(2))
+
+        if distance <= 0:
+            return {"status": "error", "message": "Movement distance must be positive."}
+
+        print(f"Command to move {direction} by {distance} meters understood")
+
+        async with movement_lock:
+            async with lock:
+                clear_all_overrides(drone)
+                guided = await set_mode(drone, "GUIDED")
+
+            if not guided:
+                return {"status": "error", "executed": cmd, "message": "GUIDED mode was not confirmed."}
+
+            worked = await move_rel(drone, direction, distance, lock)
+            loitered = await hold_pos(drone, lock)
+
+        if worked and loitered:
+            return {"status": "success", "executed": cmd, "message": "Movement completed; drone is now loitering."}
+
+        return {"status": "error", "executed": cmd, "message": "Movement failed or timed out; LOITER was requested."}
 
     elif cmd == "fly up": # Basic throttle test only
-    print("Command to fly up understood. Running basic throttle test.")
-    async with movement_lock:
-        async with lock:
-            clear_all_overrides(drone)
-            stabilized = await set_mode(drone, "STABILIZE")
-        if not stabilized:
-            return {"status": "error", "executed": cmd, "message": "STABILIZE mode was not confirmed."}
-        async with lock:
-            armed = await arm_vehicle(drone)
-        if not armed:
+        print("Command to fly up understood. Running basic throttle test.")
+
+        async with movement_lock:
             async with lock:
                 clear_all_overrides(drone)
-            return {"status": "error", "executed": cmd, "message": "Vehicle failed to arm."}
-        try:
-            await movement(drone, duration=1.0, lock=lock, throttle_val=1550)
-            worked = True
-        except Exception as error:
-            print(f"Fly-up test error: {error}")
-            worked = False
-        finally:
+                stabilized = await set_mode(drone, "STABILIZE")
+
+            if not stabilized:
+                return {"status": "error", "executed": cmd, "message": "STABILIZE mode was not confirmed."}
+
             async with lock:
-                clear_all_overrides(drone)
-                await disarm_vehicle(drone)
+                armed = await arm_vehicle(drone)
 
-    if worked:
-        return {"status": "success", "executed": cmd, "message": "Basic throttle test completed."}
+            if not armed:
+                async with lock:
+                    clear_all_overrides(drone)
 
-    return {"status": "error", "executed": cmd, "message": "Basic throttle test failed."}
+                return {"status": "error", "executed": cmd, "message": "Vehicle failed to arm."}
+
+            try:
+                await movement(drone, duration=1.0, lock=lock, throttle_val=1550)
+                worked = True
+            except Exception as error:
+                print(f"Fly-up test error: {error}")
+                worked = False
+            finally:
+                async with lock:
+                    clear_all_overrides(drone)
+                    await disarm_vehicle(drone)
+
+        if worked:
+            return {"status": "success", "executed": cmd, "message": "Basic throttle test completed."}
+
+        return {"status": "error", "executed": cmd, "message": "Basic throttle test failed."}
 
     elif cmd == "takeoff":
-    return {
-        "status": "error",
-        "executed": cmd,
-        "message": "Takeoff is temporarily disabled until the dedicated MAVLink takeoff helper is added."
-    }
-            
-    
-   elif cmd == "disarm":
-    print("Explicit disarm command received.")
-    async with lock:
-        disarmed = await disarm_vehicle(drone)
-        clear_all_overrides(drone)
-    if disarmed:
-        return {"status": "success", "executed": cmd}
-    return {"status": "error", "executed": cmd, "message": "Vehicle did not confirm disarming."}
+        return {
+            "status": "error",
+            "executed": cmd,
+            "message": "Takeoff is temporarily disabled until the dedicated MAVLink takeoff helper is added."
+        }
 
-    elif cmd in ("stop telem","stop telemetry"):
+    elif cmd == "disarm":
+        print("Explicit disarm command received.")
+
+        async with lock:
+            disarmed = await disarm_vehicle(drone)
+            clear_all_overrides(drone)
+
+        if disarmed:
+            return {"status": "success", "executed": cmd}
+
+        return {"status": "error", "executed": cmd, "message": "Vehicle did not confirm disarming."}
+
+    elif cmd in ("stop telem", "stop telemetry"):
         print("Command to stop telemetry understood. Stopping telemetry")
+
         if telem_task is not None and not telem_task.done():
             telem_task.cancel()
             telem_task = None
-        return{"status": "success", "executed": cmd}
+
+        return {"status": "success", "executed": cmd}
 
     elif cmd == "clear overrides":
         print("Command to clear overrides understood. Clearing overrides")
+
         async with lock:
             clear_all_overrides(drone)
+
         return {"status": "success", "executed": cmd}
-    
-elif cmd.startswith("set height"):
-    height_match = re.fullmatch(r"set height\s+(up|down|increase|decrease)\s+(\d+\.?\d*)", cmd)
-    if not height_match:
-        return {"status": "error", "message": "Use 'set height up 1.0' or 'set height down 0.5'."}
-    direction = height_match.group(1)
-    distance = float(height_match.group(2))
-    if distance <= 0:
-        return {"status": "error", "message": "Height change must be positive."}
-    async with movement_lock:
-        async with lock:
-            clear_all_overrides(drone)
-            guided = await set_mode(drone, "GUIDED")
-        if not guided:
-            return {"status": "error", "executed": cmd, "message": "GUIDED mode was not confirmed."}
-        if direction in ("up", "increase"):
-            print(f"Command to increase height by {distance} meters understood")
-            worked = await increase_height(drone, distance, lock)
-        else:
-            print(f"Command to decrease height by {distance} meters understood")
-            worked = await decrease_height(drone, distance, lock)
-        loitered = await hold_pos(drone, lock)
-    if worked and loitered:
-        return {"status": "success", "executed": cmd, "message": "Height changed; drone is now loitering."}
-    return {"status": "error", "executed": cmd, "message": "Height movement failed or timed out; LOITER was requested."}
-        
-   elif cmd.startswith("throttle"):
-    return {
-        "status": "error",
-        "executed": cmd,
-        "message": "Raw throttle control is disabled in the production controller."
-    }
+
+    elif cmd.startswith("set height"):
+        height_match = re.fullmatch(r"set height\s+(up|down|increase|decrease)\s+(\d+\.?\d*)", cmd)
+
+        if not height_match:
+            return {"status": "error", "message": "Use 'set height up 1.0' or 'set height down 0.5'."}
+
+        direction = height_match.group(1)
+        distance = float(height_match.group(2))
+
+        if distance <= 0:
+            return {"status": "error", "message": "Height change must be positive."}
+
+        async with movement_lock:
+            async with lock:
+                clear_all_overrides(drone)
+                guided = await set_mode(drone, "GUIDED")
+
+            if not guided:
+                return {"status": "error", "executed": cmd, "message": "GUIDED mode was not confirmed."}
+
+            if direction in ("up", "increase"):
+                print(f"Command to increase height by {distance} meters understood")
+                worked = await increase_height(drone, distance, lock)
+            else:
+                print(f"Command to decrease height by {distance} meters understood")
+                worked = await decrease_height(drone, distance, lock)
+
+            loitered = await hold_pos(drone, lock)
+
+        if worked and loitered:
+            return {"status": "success", "executed": cmd, "message": "Height changed; drone is now loitering."}
+
+        return {"status": "error", "executed": cmd, "message": "Height movement failed or timed out; LOITER was requested."}
+
+    elif cmd.startswith("throttle"):
+        return {
+            "status": "error",
+            "executed": cmd,
+            "message": "Raw throttle control is disabled in the production controller."
+        }
 
 async def main():
     # Connect to a NATS server
@@ -191,6 +221,7 @@ async def main():
             return
 
         response_payload = await process_command(drone, nc, action, drone_lock, movement_lock)
+
         if msg.reply:
             await msg.respond(json.dumps(response_payload).encode())
 
@@ -204,8 +235,10 @@ async def main():
         pass
     finally:
         global telem_task
+
         if telem_task and not telem_task.done():
             telem_task.cancel()
+
         # Drain messages and close the connection
         await sub.unsubscribe()
         await nc.drain()
