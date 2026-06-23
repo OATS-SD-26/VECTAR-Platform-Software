@@ -325,7 +325,21 @@ async def arm_vehicle(drone, timeout=10):
         0, 0, 0, 0, 0, 0
     )
 
-    async def takeoff_vehicle(drone, lock, takeoff_height=1.0, timeout=20, ack_timeout=3):
+    # Wait until the vehicle acknowledges it is armed
+    print("Waiting for vehicle to arm...")
+    start_time = time.time()
+    # arming has a timeout before it calls itself again, allows for no flying commands to work without having to be armed
+    while time.time() - start_time < timeout:
+        msg = drone.recv_match(type='HEARTBEAT', blocking=False)
+        if msg:
+            if msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED:  # This checks if the armed flag is set
+                print("VEHICLE ARMED!")
+                return True
+        await asyncio.sleep(0.1)  # Give NATS control back in between checks for arm
+    print("VEHCILE NOT ABLE TO BE ARMED!")
+    return False
+
+async def takeoff_vehicle(drone, lock, takeoff_height=1.0, timeout=20, ack_timeout=3):
     if takeoff_height <= 0:
         return {"status": "error", "reason": "invalid_takeoff_height", "message": "Takeoff height must be positive.", "airborne": False}
     start_alt = await starting_alt(drone, lock)
@@ -419,19 +433,6 @@ async def arm_vehicle(drone, timeout=10):
     return {
         "status": "error","reason": reason,"message": message,"airborne": climbed,"start_alt": start_alt,
         "target_alt": target_alt,"current_alt": current_alt,"ack_result": ack_result}
-    # Wait until the vehicle acknowledges it is armed
-    print("Waiting for vehicle to arm...")
-    start_time = time.time()
-    # arming has a timeout before it calls itself again, allows for no flying commands to work without having to be armed
-    while time.time() - start_time < timeout:
-        msg = drone.recv_match(type='HEARTBEAT', blocking=False)
-        if msg:
-            if msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED:  # This checks if the armed flag is set
-                print("VEHICLE ARMED!")
-                return True
-        await asyncio.sleep(0.1)  # Give NATS control back in between checks for arm
-    print("VEHCILE NOT ABLE TO BE ARMED!")
-    return False
 
 async def disarm_vehicle(drone, timeout=5):
     print("Sending normal disarm command...")
