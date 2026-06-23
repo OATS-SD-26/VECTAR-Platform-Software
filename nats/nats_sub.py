@@ -6,7 +6,7 @@ import re
 from drone_thing import *
 from pymavlink import mavutil
 
-telem_task = None # This ensures that there's only ever one instance of the telemetry stream being ran so that there aren't conflicts
+telem_task = None # Ensures that only one telemetry stream runs at a time
 
 async def send_telem_stream(drone, nc, lock):
     while True:
@@ -18,13 +18,8 @@ async def send_telem_stream(drone, nc, lock):
                 "timestamp": time.time(),
                 "device": "drone",
                 "data": {
-                    "roll": t["roll"],
-                    "pitch": t["pitch"],
-                    "yaw": t["yaw"],
-                    "lat": t["lat"],
-                    "lon": t["lon"],
-                    "alt": t["alt"],
-                    "hdg": t["hdg"]
+                    "roll": t["roll"], "pitch": t["pitch"], "yaw": t["yaw"],
+                    "lat": t["lat"], "lon": t["lon"], "alt": t["alt"], "hdg": t["hdg"]
                 }
             }
             await nc.publish("drone.telem.stream", json.dumps(telem_payload).encode())
@@ -37,6 +32,9 @@ async def process_command(drone, nc, cmd, lock, movement_lock):
     if cmd is None:
         return {"status": "error", "message": "Missing command"}
 
+    if not isinstance(cmd, str):
+        return {"status": "error", "message": "Command must be a string"}
+
     cmd = cmd.strip().lower()
 
     if cmd == "telem":
@@ -44,9 +42,9 @@ async def process_command(drone, nc, cmd, lock, movement_lock):
             print("Starting telemetry stream...")
             telem_task = asyncio.create_task(send_telem_stream(drone, nc, lock))
             return {"status": "success", "message": "Stream started"}
-        else:
-            print("Telemetry stream already active.")
-            return {"status": "ignored", "message": "Stream already running"}
+
+        print("Telemetry stream already active.")
+        return {"status": "ignored", "message": "Stream already running"}
 
     elif cmd.startswith("move"):
         move_match = re.fullmatch(r"move\s+(forward|back|left|right)\s+(\d+\.?\d*)", cmd)
@@ -115,31 +113,45 @@ async def process_command(drone, nc, cmd, lock, movement_lock):
         return {"status": "error", "executed": cmd, "message": "Basic throttle test failed."}
 
     elif cmd.startswith("takeoff"):
-        takeoff_match = re.fullmatch(r"takeoff\s(\d+\.?\d*)", cmd)
+        takeoff_match = re.fullmatch(r"takeoff\s+(\d+\.?\d*)", cmd)
+
         if not takeoff_match:
-            return {"status": "error", "message": "Use 'takeoff (distance)'"}
-        distance = float(takeoff_match.group(1))
-         print(f"Command to take off by {height} meters understood.")
+            return {"status": "error", "message": "Use 'takeoff 1.0'."}
+
+        height = float(takeoff_match.group(1))
+
+        if height <= 0:
+            return {"status": "error", "message": "Takeoff height must be positive."}
+
+        print(f"Command to take off by {height} meters understood.")
+
         async with movement_lock:
-            async with lock: 
+            async with lock:
                 clear_all_overrides(drone)
-                guided = await set_mode(drone,"GUIDED")
-            if not guided: 
-                print(f"Drone could not be entered into guided mode, takeoff cannot work till this is fixed")
-                return {"status":"error","message":"Not entered into guided mode"}
+                guided = await set_mode(drone, "GUIDED")
+
+            if not guided:
+                print("Drone could not enter GUIDED mode. Takeoff cannot continue.")
+                return {"status": "error", "executed": cmd, "reason": "guided_mode_failed", "message": "Drone could not enter GUIDED mode."}
+
             result = await takeoff_vehicle(drone, lock, takeoff_height=height)
 
             if result["status"] != "success":
                 result["executed"] = cmd
                 return result
-                
+
             loitered = await hold_pos(drone, lock)
-            if not loitered:
-               return {"status": "error","executed": cmd,"reason": "loiter_failed","message": "Takeoff completed, but LOITER mode was not confirmed.","takeoff_result": result}
-            result["executed"] = cmd
-            result["message"] = "Takeoff completed; drone is now loitering."
-            return result
-                
+
+        if not loitered:
+            return {
+                "status": "error", "executed": cmd, "reason": "loiter_failed",
+                "message": "Takeoff completed, but LOITER mode was not confirmed.",
+                "takeoff_result": result
+            }
+
+        result["executed"] = cmd
+        result["message"] = "Takeoff completed; drone is now loitering."
+        return result
 
     elif cmd == "disarm":
         print("Explicit disarm command received.")
@@ -205,14 +217,13 @@ async def process_command(drone, nc, cmd, lock, movement_lock):
         return {"status": "error", "executed": cmd, "message": "Height movement failed or timed out; LOITER was requested."}
 
     elif cmd.startswith("throttle"):
-        return {
-            "status": "error",
-            "executed": cmd,
-            "message": "Raw throttle control is disabled in the production controller."
-        }
+        return {"status": "error", "executed": cmd, "message": "Raw throttle control is disabled in the production controller."}
+
+    return {"status": "error", "executed": cmd, "message": "Unknown command."}
 
 async def main():
-    # Connect to a NATS server
+    global telem_task
+
     nc = await nats.connect("nats://localhost:4222")
 
     PORT = "/dev/ttyS4"
@@ -236,8 +247,12 @@ async def main():
         try:
             request = json.loads(msg.data.decode())
             action = request.get("action")
-        except json.JSONDecodeError:
+        except (UnicodeDecodeError, json.JSONDecodeError):
             print("Received invalid JSON. Ignoring.")
+
+            if msg.reply:
+                await msg.respond(json.dumps({"status": "error", "message": "Invalid JSON request."}).encode())
+
             return
 
         response_payload = await process_command(drone, nc, action, drone_lock, movement_lock)
@@ -246,23 +261,19 @@ async def main():
             await msg.respond(json.dumps(response_payload).encode())
 
     sub = await nc.subscribe("drone", cb=message_handler)
-    print(f"Subscribed to 'drone', waiting for messages...")
+    print("Subscribed to 'drone', waiting for messages...")
 
-    # Keep the connection alive to receive messages
     try:
-        await asyncio.Future() # Run forever
+        await asyncio.Future()
     except KeyboardInterrupt:
         pass
     finally:
-        global telem_task
-
-        if telem_task and not telem_task.done():
+        if telem_task is not None and not telem_task.done():
             telem_task.cancel()
 
-        # Drain messages and close the connection
         await sub.unsubscribe()
         await nc.drain()
         await nc.close()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(main())
