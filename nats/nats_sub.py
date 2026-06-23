@@ -153,6 +153,25 @@ async def process_command(drone, nc, cmd, lock, movement_lock):
         result["message"] = "Takeoff completed; drone is now loitering."
         return result
 
+     elif cmd.startswith("land"):
+        land_match = re.fullmatch(r"land\s+(start)", cmd)
+        if not land_match:
+            return {"status": "error", "message": "Use 'land start'."}
+        destination = land_match.group(1)
+        if destination == "start":
+            target_position = None
+            print("Command to land at the stored starting position understood.")
+        async with movement_lock:
+            async with lock:
+                clear_all_overrides(drone)
+                guided = await set_mode(drone, "GUIDED")
+            if not guided:
+                return {"status": "error", "executed": cmd, "reason": "guided_mode_failed", "message": "Drone could not enter GUIDED mode for the landing approach."}
+            result = await land_at_position(drone, lock, target_position)
+
+        result["executed"] = cmd
+        return result
+
     elif cmd == "disarm":
         print("Explicit disarm command received.")
 
