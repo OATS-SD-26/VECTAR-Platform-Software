@@ -81,23 +81,26 @@ def stop_telem(drone):
         0   # STOP STREAM
     )
 
-def set_mode(drone, mode):
-    # Check if the mode is available in the mapping
-    if mode not in drone.mode_mapping():
-        print(f"Unknown mode : {mode}")
-        return
+async def set_mode(drone, mode, timeout=5):
+    mode_mapping = drone.mode_mapping() or {}
+    if mode not in mode_mapping:
+        print(f"Unknown mode: {mode}")
+        return False
 
-    mode_id = drone.mode_mapping()[mode]
+    mode_id = mode_mapping[mode]
+    drone.mav.command_long_send(drone.target_system, drone.target_component, mavutil.mavlink.MAV_CMD_DO_SET_MODE, 0, mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, mode_id, 0, 0, 0, 0, 0)
+    print(f"Requested {mode} mode")
 
-    # Send the command to change mode
-    drone.mav.command_long_send(
-        drone.target_system,
-        drone.target_component,
-        mavutil.mavlink.MAV_CMD_DO_SET_MODE,
-        0,
-        mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-        mode_id, 0, 0, 0, 0, 0
-    )
+    start_time = time.monotonic()
+    while time.monotonic() - start_time < timeout:
+        msg = drone.recv_match(type="HEARTBEAT", blocking=False)
+        if msg and msg.custom_mode == mode_id:
+            print(f"Vehicle entered {mode} mode")
+            return True
+        await asyncio.sleep(0.1)
+
+    print(f"Vehicle did not confirm {mode} mode")
+    return False
 
     print(f"Switching to {mode} mode...")
 
@@ -282,7 +285,7 @@ async def hold_pos(drone, lock):
     print("Switching to loiter mode")
     async with lock:
         clear_all_overrides(drone)
-        set_mode(drone, "LOITER")
+        await set_mode(drone, "LOITER")
     return True
 
 async def decrease_height(drone, target_height, lock, timeout=20):
@@ -340,38 +343,22 @@ async def arm_vehicle(drone, timeout=10):
     print("VEHCILE NOT ABLE TO BE ARMED!")
     return False
 
-async def disarm_vehicle(drone):
-    print("Sending disarm command...")
+async def disarm_vehicle(drone, timeout=5):
+    print("Sending normal disarm command...")
+    start_time = time.monotonic()
 
-    for attempt in range(30):
-        # Set throttle to minimum value and center virtual sticks
-        drone.mav.rc_channels_override_send(
-            drone.target_system,
-            drone.target_component,
-            1500, 1500, 1000, 1500, 65535, 65535, 65535, 65535
-        )
+    while time.monotonic() - start_time < timeout:
+        drone.mav.command_long_send(drone.target_system, drone.target_component, mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0, 0, 0, 0, 0, 0, 0, 0)
 
-        # Send disarm command using FORCE flag
-        drone.mav.command_long_send(
-            drone.target_system,
-            drone.target_component,
-            mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
-            0,
-            0,      # 0 to DISARM
-            21196,  # This is used to FORCE disarm
-            0, 0, 0, 0, 0
-        )
-
-        # Check if successfully disarmed
-        msg = drone.recv_match(type='HEARTBEAT', blocking=False)
-        if msg:
-            if not (msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
-                print("VEHICLE DISARMED!")
-                return
+        msg = drone.recv_match(type="HEARTBEAT", blocking=False)
+        if msg and not (msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
+            print("VEHICLE DISARMED!")
+            return True
 
         await asyncio.sleep(0.1)
 
-    print("WARNING: Drone refused to disarm after 3 seconds!")
+    print("Vehicle did not confirm disarming")
+    return False
 
 '''
 This only worked in the GUIDED mode, which doesn't work for now
@@ -468,27 +455,35 @@ async def movement(
             )
         await asyncio.sleep(0.1)  # Send at 10Hz
 
-if __name__ == "__main__":
+async def test_telem():
     PORT = "/dev/ttyS4"
     BAUD = 57600
     drone = mavutil.mavlink_connection(PORT, BAUD)
     drone.source_system = 255
+    lock = asyncio.Lock()
 
-    # Test motors
-    set_mode(drone, 'STABILIZE')
-    arm_vehicle(drone)
-    throttle_continuous(drone, 1500, 5)
-    disarm_vehicle(drone)
+    async with lock:
+        initialized = await initialize_telem(drone)
 
-    # Test telem
-    drone = initialize_telem(drone)
-    while True:
-        try:
-            t = get_telem(drone)
-            print(f"Roll: {t["roll"]:.4f} | Pitch: {t["pitch"]:.4f} | Yaw: {t["yaw"]:.4f}", end='\r', flush=True)
-            print(f"Lat: {t["lat"]:.4f} | Lon: {t["lon"]:.4f} | Alt: {t["alt"]:.4f}", end='\r', flush=True)
+    if not initialized:
+        print("Telemetry initialization failed")
+        return
 
-        except KeyboardInterrupt:
-            break
+    print("Telemetry initialized. Press Ctrl+C to stop.")
 
-    print("")  # This is to handle the telem text sticking around when stopping the program
+    try:
+        while True:
+            async with lock:
+                telemetry = await get_telem(drone)
+
+            if telemetry is not None:
+                print(f"Roll: {telemetry['roll']:.2f} | Pitch: {telemetry['pitch']:.2f} | Yaw: {telemetry['yaw']:.2f}")
+                print(f"Lat: {telemetry['lat']:.7f} | Lon: {telemetry['lon']:.7f} | Alt: {telemetry['alt']:.2f} | Heading: {telemetry['hdg']:.2f}")
+
+            await asyncio.sleep(0.5)
+
+    except KeyboardInterrupt:
+        print("\nTelemetry test stopped")
+
+if __name__ == "__main__":
+    asyncio.run(test_telem())
