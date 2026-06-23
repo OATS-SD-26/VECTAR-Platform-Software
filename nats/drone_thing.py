@@ -451,7 +451,7 @@ async def takeoff_vehicle(drone, lock, takeoff_height=1.0, timeout=20, ack_timeo
         "status": "error","reason": reason,"message": message,"airborne": climbed,"start_alt": start_alt,
         "target_alt": target_alt,"current_alt": current_alt,"ack_result": ack_result}
 
-async def land_at_position(drone, lock, target_position=None, approach_timeout=30, landing_timeout=60, horizontal_accept_radius=1.0):
+async def land_at_position(drone, lock, target_position, approach_timeout=30, landing_timeout=60, horizontal_accept_radius=1.0):
     global STARTING_POSITION
     if target_position is None:
         target_position = STARTING_POSITION
