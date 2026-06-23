@@ -285,8 +285,8 @@ async def hold_pos(drone, lock):
     print("Switching to loiter mode")
     async with lock:
         clear_all_overrides(drone)
-        await set_mode(drone, "LOITER")
-    return True
+        loitered = await set_mode(drone, "LOITER")
+    return loitered
 
 async def decrease_height(drone, target_height, lock, timeout=20):
     if target_height <= 0:
