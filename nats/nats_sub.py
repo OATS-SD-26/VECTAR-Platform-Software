@@ -114,12 +114,32 @@ async def process_command(drone, nc, cmd, lock, movement_lock):
 
         return {"status": "error", "executed": cmd, "message": "Basic throttle test failed."}
 
-    elif cmd == "takeoff":
-        return {
-            "status": "error",
-            "executed": cmd,
-            "message": "Takeoff is temporarily disabled until the dedicated MAVLink takeoff helper is added."
-        }
+    elif cmd.startswith("takeoff"):
+        takeoff_match = re.fullmatch(r"takeoff\s(\d+\.?\d*)", cmd)
+        if not takeoff_match:
+            return {"status": "error", "message": "Use 'takeoff (distance)'"}
+        distance = float(takeoff_match.group(1))
+         print(f"Command to take off by {height} meters understood.")
+        async with movement_lock:
+            async with lock: 
+                clear_all_overrides(drone)
+                guided = await set_mode(drone,"GUIDED")
+            if not guided: 
+                print(f"Drone could not be entered into guided mode, takeoff cannot work till this is fixed")
+                return {"status":"error","message":"Not entered into guided mode"}
+            result = await takeoff_vehicle(drone, lock, takeoff_height=height)
+
+            if result["status"] != "success":
+                result["executed"] = cmd
+                return result
+                
+            loitered = await hold_pos(drone, lock)
+            if not loitered:
+               return {"status": "error","executed": cmd,"reason": "loiter_failed","message": "Takeoff completed, but LOITER mode was not confirmed.","takeoff_result": result}
+            result["executed"] = cmd
+            result["message"] = "Takeoff completed; drone is now loitering."
+            return result
+                
 
     elif cmd == "disarm":
         print("Explicit disarm command received.")
