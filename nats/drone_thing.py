@@ -2,7 +2,7 @@ from pymavlink import mavutil
 import math
 import time
 import asyncio
-STARTING_ALT = None
+STARTING_POSITION = None
 
 async def initialize_telem(drone):
     print("Waiting for heartbeat...")
@@ -104,28 +104,45 @@ async def set_mode(drone, mode, timeout=5):
 
     print(f"Switching to {mode} mode...")
 
-async def starting_alt(drone, lock): #get the starting height and set to a global variable
-    global STARTING_ALT
-    if STARTING_ALT is not None:
-        print(f"Starting altitude is already set at {STARTING_ALT}m")
-        return STARTING_ALT
-    print("Finding starting altitude")
-    async with lock:
-        t = await get_telem(drone)
-    if t is None:
-        print("Error with get telementary data")
-        return None
-    else:
-        start_alt = t["alt"]
-        print("Extracted intial altitude")
-    if start_alt == -1:
-        print("Unable to real precise starting altitude")
-        return None
-    else:
-        STARTING_ALT = start_alt
-        print(f"Sucessfully extracted starting altitude which is set to {start_alt} m")
-        return STARTING_ALT
+async def starting_alt(drone, lock):
+    position = await starting_position(drone, lock)
 
+    if position is None:
+        return None
+
+    return position["alt"]
+        
+async def starting_position(drone, lock):
+    global STARTING_POSITION
+    if STARTING_POSITION is not None:
+        print(f"Starting position already stored: "f"lat={STARTING_POSITION['lat']}, "f"lon={STARTING_POSITION['lon']}, "f"alt={STARTING_POSITION['alt']} m")
+        return STARTING_POSITION
+    print("Finding starting position")
+    async with lock:
+        telemetry = await get_telem(drone)
+    if telemetry is None:
+        print("Could not obtain starting-position telemetry")
+        return None
+    start_lat = telemetry["lat"]
+    start_lon = telemetry["lon"]
+    start_alt = telemetry["alt"]
+
+    if start_lat == -1 or start_lon == -1 or start_alt == -1:
+        print("Could not obtain valid starting coordinates")
+        return None
+
+    STARTING_POSITION = {
+        "lat": start_lat,
+        "lon": start_lon,
+        "alt": start_alt
+    }
+
+    print(
+        f"Starting position stored: "
+        f"lat={start_lat}, lon={start_lon}, alt={start_alt} m"
+    )
+
+    return STARTING_POSITION
 def gps_offset_meters(lat, lon, distance_m, bearing_deg):
     R = 6371000  # Earth radius in meters
 
@@ -433,6 +450,136 @@ async def takeoff_vehicle(drone, lock, takeoff_height=1.0, timeout=20, ack_timeo
     return {
         "status": "error","reason": reason,"message": message,"airborne": climbed,"start_alt": start_alt,
         "target_alt": target_alt,"current_alt": current_alt,"ack_result": ack_result}
+
+async def land_at_position(drone, lock, target_position=None, approach_timeout=30, landing_timeout=60, horizontal_accept_radius=1.0):
+    global STARTING_POSITION
+    if target_position is None:
+        target_position = STARTING_POSITION
+    if target_position is None:
+        return {"status": "error","reason": "landing_target_unavailable","message": "No landing position has been stored.","airborne": True}
+    try:
+        target_lat = float(target_position["lat"])
+        target_lon = float(target_position["lon"])
+        target_ground_alt = float(target_position["alt"])
+    except (KeyError, TypeError, ValueError):
+        return {"status": "error","reason": "invalid_landing_target","message": "Landing target must contain valid latitude, longitude, and altitude values.","airborne": True}
+    async with lock:
+        telemetry = await get_telem(drone)
+    if telemetry is None:
+        return {
+            "status": "error",
+            "reason": "landing_telemetry_unavailable",
+            "message": "Could not obtain telemetry before landing.",
+            "airborne": True
+        }
+
+    current_lat = telemetry["lat"]
+    current_lon = telemetry["lon"]
+    current_alt = telemetry["alt"]
+
+    if current_lat == -1 or current_lon == -1 or current_alt == -1:
+        return {
+            "status": "error",
+            "reason": "invalid_landing_telemetry",
+            "message": "Valid GPS and altitude telemetry are required for landing.",
+            "airborne": True
+        }
+
+    approach_distance = distance_between_points(current_lat,current_lon,target_lat,target_lon)
+
+    print(f"Landing target: lat={target_lat}, lon={target_lon}")
+    print(f"Distance from landing target: {approach_distance:.2f} m")
+    print(f"Maintaining approach altitude: {current_alt:.2f} m")
+
+    if approach_distance > horizontal_accept_radius:
+        approached = await move_gps(
+            drone,
+            target_lat,
+            target_lon,
+            current_alt,
+            lock,
+            approach_timeout,
+            horizontal_accept_radius,
+            0.3
+        )
+
+        if not approached:
+            return {
+                "status": "error",
+                "reason": "landing_approach_failed",
+                "message": "Vehicle could not reach the landing coordinates.",
+                "airborne": True,
+                "target_lat": target_lat,
+                "target_lon": target_lon,
+                "approach_distance": approach_distance
+            }
+    else:
+        print("Vehicle is already within the landing target radius")
+
+    async with lock:
+        clear_all_overrides(drone)
+        land_mode = await set_mode(drone, "LAND")
+
+    if not land_mode:
+        return {
+            "status": "error",
+            "reason": "land_mode_failed",
+            "message": "Vehicle reached the target, but LAND mode was not confirmed.",
+            "airborne": True,
+            "target_lat": target_lat,
+            "target_lon": target_lon
+        }
+
+    print("LAND mode confirmed. Monitoring landing.")
+
+    monitor_start = time.monotonic()
+    current_alt = telemetry["alt"]
+    received_valid_altitude = False
+
+    while time.monotonic() - monitor_start < landing_timeout:
+        async with lock:
+            telemetry = await get_telem(drone)
+            armed = drone.motors_armed()
+
+        if telemetry is not None and telemetry["alt"] != -1:
+            current_alt = telemetry["alt"]
+            received_valid_altitude = True
+
+            print(
+                f"Landing altitude: {current_alt:.2f} m | "
+                f"Stored ground altitude: {target_ground_alt:.2f} m"
+            )
+
+        if not armed:
+            return {
+                "status": "success",
+                "reason": "landing_complete",
+                "message": "Vehicle landed and disarmed at the target position.",
+                "airborne": False,
+                "target_lat": target_lat,
+                "target_lon": target_lon,
+                "current_alt": current_alt
+            }
+
+        await asyncio.sleep(0.2)
+
+    if not received_valid_altitude:
+        reason = "landing_telemetry_unavailable"
+        message = "LAND mode was entered, but no valid altitude telemetry was received."
+    else:
+        reason = "landing_timeout"
+        message = "Vehicle did not confirm landing and disarming before the timeout."
+
+    return {
+        "status": "error",
+        "reason": reason,
+        "message": message,
+        "airborne": True,
+        "target_lat": target_lat,
+        "target_lon": target_lon,
+        "current_alt": current_alt
+    }
+    
 
 async def disarm_vehicle(drone, timeout=5):
     print("Sending normal disarm command...")
